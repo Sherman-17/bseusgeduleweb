@@ -590,3 +590,50 @@ aTabs.prototype.Deactivate=function(){
 		if (this.thdrs[i].Active())
 			this.thdrs[i].Deactivate();
 }
+
+// Server entry point (Node.js / Render). In the browser this block is skipped
+// because `window` is defined; on the server we start an HTTP server that
+// serves this file and listens on process.env.PORT as required by Render.
+if (typeof window === 'undefined' && typeof require !== 'undefined') {
+  var http = require('http');
+  var fs = require('fs');
+  var path = require('path');
+  var PORT = process.env.PORT || 3000;
+  var server = http.createServer(function (req, res) {
+    var file = req.url === '/' ? 'index.html' : req.url;
+    var filePath = path.join(__dirname, decodeURIComponent(file.split('?')[0]));
+    fs.readFile(filePath, function (err, data) {
+      if (err) {
+        fs.readFile(path.join(__dirname, 'schedj.js'), function (e2, js) {
+          if (e2) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Not found');
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+            res.end(js);
+          }
+        });
+        return;
+      }
+      var ext = path.extname(filePath).toLowerCase();
+      var types = {
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'application/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.png': 'image/png',
+        '.svg': 'image/svg+xml',
+        '.webmanifest': 'application/manifest+json'
+      };
+      res.writeHead(200, { 'Content-Type': types[ext] || 'application/octet-stream' });
+      res.end(data);
+    });
+  });
+  server.listen(PORT, '0.0.0.0', function () {
+    console.log('Server is running at http://0.0.0.0:' + PORT);
+  });
+  server.on('error', function (err) {
+    console.error('Server failed to start:', err);
+    process.exit(1);
+  });
+}
