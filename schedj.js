@@ -598,10 +598,72 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   var http = require('http');
   var fs = require('fs');
   var path = require('path');
+  var iconv = require('iconv-lite');
   var PORT = process.env.PORT || 3000;
+
+  // BSEU declares UTF-8 but actually returns windows-1251 bytes. We try to
+  // decode as win1251; if the result contains genuine cyrillic letters we use
+  // it, otherwise we fall back to UTF-8.
+  function hasCyrillic(str) {
+    return /[?-??-???]/.test(str);
+  }
+  function decodeBuffer(buffer) {
+    try {
+      var win = iconv.decode(buffer, 'win1251');
+      if (hasCyrillic(win)) return win;
+    } catch (e) {}
+    return buffer.toString('utf-8');
+  }
+
+  // Proxy to BSEU schedule endpoint so the browser can fetch forms/courses/groups.
+  function handleProxy(req, res) {
+    var bodyChunks = [];
+    req.on('data', function (c) { bodyChunks.push(c); });
+    req.on('end', function () {
+      var payload;
+      try {
+        payload = JSON.parse(Buffer.concat(bodyChunks).toString('utf-8') || '{}');
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'bad_json' }));
+        return;
+      }
+      var targetUrl = payload.url || 'https://bseu.by/schedule/';
+      var postBody = payload.body || '';
+      // BSEU expects the request body encoded in windows-1251.
+      var postBuffer = iconv.encode(postBody, 'win1251');
+      fetch(targetUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=windows-1251',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        body: postBuffer
+      }).then(function (response) {
+        return response.arrayBuffer().then(function (buf) {
+          var buffer = Buffer.from(buf);
+          var decoded = decodeBuffer(buffer);
+          res.writeHead(response.status, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(decoded);
+        });
+      }).catch(function (err) {
+        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'proxy_failed', message: err.message }));
+      });
+    });
+  }
+
   var server = http.createServer(function (req, res) {
-    var file = req.url === '/' ? 'index.html' : req.url;
-    var filePath = path.join(__dirname, decodeURIComponent(file.split('?')[0]));
+    var parsed = new URL(req.url, 'http://localhost');
+    var pathname = decodeURIComponent(parsed.pathname);
+
+    if (pathname === '/api/proxy' && req.method === 'POST') {
+      handleProxy(req, res);
+      return;
+    }
+
+    var file = pathname === '/' ? 'index.html' : pathname;
+    var filePath = path.join(__dirname, file.split('?')[0]);
     fs.readFile(filePath, function (err, data) {
       if (err) {
         fs.readFile(path.join(__dirname, 'schedj.js'), function (e2, js) {
