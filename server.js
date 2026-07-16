@@ -119,6 +119,11 @@ app.post('/api/proxy', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running at http://localhost:${PORT}`);
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server is running at http://0.0.0.0:${PORT}`);
+});
+
+server.on('error', (err) => {
+  console.error('Server failed to start:', err);
+  process.exit(1);
 });
