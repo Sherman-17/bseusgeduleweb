@@ -1,0 +1,1693 @@
+<!DOCTYPE html>
+<html class="light" lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/>
+  <title>БГЭУ Расписание - Новое поколение</title>
+  <link rel="manifest" href="manifest.webmanifest"/>
+  <meta name="theme-color" content="#4f59a4"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+  <meta name="apple-mobile-web-app-title" content="БГЭУ"/>
+  <link rel="apple-touch-icon" href="icon-192.png"/>
+  <link rel="apple-touch-icon" sizes="512x512" href="icon-512.png"/>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          screens: {
+            'xs': '480px',
+          },
+          colors: {
+            "outline-variant": "#acb3b7",
+            "on-error": "#fff7f7",
+            "on-primary-container": "#2b357f",
+            "tertiary-dim": "#65496c",
+            "on-secondary-fixed-variant": "#255ba3",
+            "on-secondary": "#f8f8ff",
+            "on-secondary-container": "#155199",
+            "error-dim": "#770326",
+            "on-primary-fixed": "#131e69",
+            "primary": "#4f59a4",
+            "on-primary": "#fbf8ff",
+            "on-surface-variant": "#596063",
+            "on-tertiary-container": "#604567",
+            "surface-variant": "#dde3e7",
+            "error-container": "#f76a80",
+            "surface-container-highest": "#dde3e7",
+            "on-surface": "#2d3337",
+            "primary-fixed-dim": "#a4aeff",
+            "on-tertiary-fixed-variant": "#6a4e71",
+            "primary-dim": "#424c97",
+            "surface-container": "#eaeef1",
+            "surface-container-low": "#f1f4f6",
+            "surface-bright": "#f7f9fb",
+            "inverse-surface": "#0b0f10",
+            "error": "#ac3149",
+            "tertiary": "#715578",
+            "inverse-primary": "#9ea8fa",
+            "on-tertiary-fixed": "#4c3253",
+            "tertiary-fixed": "#f5d1fb",
+            "surface": "#f7f9fb",
+            "secondary-dim": "#18539a",
+            "tertiary-fixed-dim": "#e7c3ed",
+            "on-tertiary": "#fff7fb",
+            "tertiary-container": "#f5d1fb",
+            "on-error-container": "#68001f",
+            "secondary-fixed-dim": "#c0d5ff",
+            "on-background": "#2d3337",
+            "background": "#f7f9fb",
+            "on-secondary-fixed": "#003e7e",
+            "on-primary-fixed-variant": "#343e88",
+            "primary-fixed": "#b5bcff",
+            "surface-container-high": "#e3e9ec",
+            "inverse-on-surface": "#9a9d9f",
+            "secondary-fixed": "#d6e3ff",
+            "surface-tint": "#4f59a4",
+            "primary-container": "#b5bcff",
+            "secondary-container": "#d6e3ff",
+            "outline": "#757c7f",
+            "surface-dim": "#d3dbdf",
+            "secondary": "#295fa7",
+            "surface-container-lowest": "#ffffff"
+          },
+          borderRadius: {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "1.5rem",
+            "full": "9999px"
+          },
+          fontFamily: {
+            "headline": ["Manrope"],
+            "body": ["Inter"],
+            "label": ["Inter"]
+          }
+        },
+      },
+    }
+  </script>
+  <style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+    .signature-gradient {
+      background: linear-gradient(135deg, #4f59a4 0%, #b5bcff 100%);
+    }
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    .day-shifts-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .day-shifts-scrollbar::-webkit-scrollbar-thumb {
+      background-color: rgba(79, 89, 164, 0.2);
+      border-radius: 4px;
+    }
+    .dark .day-shifts-scrollbar::-webkit-scrollbar-thumb {
+      background-color: rgba(181, 188, 255, 0.2);
+    }
+    .day-shifts-scrollbar {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(79, 89, 164, 0.2) transparent;
+    }
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow-x: hidden;
+    }
+    body {
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+     main {
+       overflow-x: hidden;
+       padding-bottom: 80px;
+     }
+     /* Календарь доходов: фиксированная высота строки, чтобы в ячейке
+        помещалось до 6 строк (пар или смен) без наложения */
+     #calendar-grid {
+       grid-auto-rows: 152px;
+     }
+
+    
+    .autocomplete-suggestion {
+      padding: 12px 16px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .autocomplete-suggestion i {
+      font-size: 16px;
+      color: #9a9d9f;
+    }
+     .autocomplete-suggestion:hover {
+       background-color: #f1f4f6;
+       color: #4f59a4;
+     }
+
+     /* Фокус повторяет скругление элемента (outline следует border-radius) */
+     button:focus-visible,
+     a:focus-visible,
+     [role="button"]:focus-visible,
+     input:focus-visible,
+     select:focus-visible {
+       outline: 2px solid #4f59a4;
+       outline-offset: 2px;
+       box-shadow: none;
+     }
+     .dark button:focus-visible,
+     .dark a:focus-visible,
+     .dark [role="button"]:focus-visible,
+     .dark input:focus-visible,
+     .dark select:focus-visible {
+       outline-color: #9ea8fa;
+     }
+     button:focus:not(:focus-visible),
+     a:focus:not(:focus-visible),
+     [role="button"]:focus:not(:focus-visible),
+     input:focus:not(:focus-visible),
+     select:focus:not(:focus-visible) {
+       outline: none;
+     }
+
+     /* Сегментированные переключатели: радиус кнопки = радиус дорожки − padding */
+     .segment-track {
+       --seg-r: 12px;
+       --seg-p: 3px;
+       --seg-gap: 2px;
+       display: flex;
+       align-items: stretch;
+       gap: var(--seg-gap);
+       padding: var(--seg-p);
+       border-radius: var(--seg-r);
+     }
+     .segment-track--nav {
+       --seg-r: 11px;
+       width: fit-content;
+     }
+     .segment-track > button {
+       flex: 1 1 0;
+       min-width: 0;
+       margin: 0;
+       border: none;
+       border-radius: calc(var(--seg-r) - var(--seg-p));
+       cursor: pointer;
+       -webkit-tap-highlight-color: transparent;
+       transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+     }
+     .segment-track--nav > button {
+       flex: 0 1 auto;
+     }
+     .segment-track > button.segment-btn-active {
+       background-color: #ffffff;
+       box-shadow:
+         0 1px 2px rgba(15, 23, 42, 0.07),
+         inset 0 0 0 1px rgba(15, 23, 42, 0.05);
+     }
+     .dark .segment-track > button.segment-btn-active {
+       background-color: rgb(51 65 85);
+       box-shadow:
+         0 1px 3px rgba(0, 0, 0, 0.25),
+         inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+     }
+     .segment-track--nav > button.segment-btn-active {
+       background-color: #4f59a4;
+       color: #fbf8ff;
+       box-shadow: 0 1px 3px rgba(79, 89, 164, 0.35);
+     }
+     .dark .segment-track--nav > button.segment-btn-active {
+       background-color: #4f59a4;
+       color: #fbf8ff;
+       box-shadow: 0 1px 3px rgba(79, 89, 164, 0.45);
+     }
+     .segment-track > button.segment-btn-inactive {
+       background: transparent;
+     }
+     .segment-track > button.segment-btn-inactive:hover {
+       background: rgba(255, 255, 255, 0.5);
+     }
+     .dark .segment-track > button.segment-btn-inactive:hover {
+       background: rgba(51, 65, 85, 0.45);
+     }
+     .segment-track > button.segment-btn-exam-active {
+       background-color: rgb(244 63 94);
+       color: #ffffff;
+       box-shadow: 0 1px 3px rgba(244, 63, 94, 0.35);
+     }
+     .segment-track > button:focus-visible {
+       outline: 2px solid #4f59a4;
+       outline-offset: 0;
+       z-index: 1;
+       position: relative;
+     }
+     .dark .segment-track > button:focus-visible {
+       outline-color: #9ea8fa;
+     }
+     .dark .autocomplete-suggestion:hover {
+       background-color: #1e293b;
+       color: #b5bcff;
+     }
+     
+     @keyframes slideDownFade {
+       0% {
+         opacity: 0;
+         transform: translateY(-20px);
+       }
+       100% {
+         opacity: 1;
+         transform: translateY(0);
+       }
+     }
+     .animate-slide-down {
+       animation: slideDownFade 0.3s ease-out forwards;
+     }
+
+    /* === Mobile Optimizations === */
+    
+    /* Bottom navigation bar for mobile */
+    .mobile-bottom-nav {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(255,255,255,0.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-top: 1px solid rgba(172,179,183,0.15);
+      padding: 8px 0;
+      padding-bottom: max(8px, env(safe-area-inset-bottom, 8px));
+      box-shadow: 0 -2px 20px rgba(0,0,0,0.06);
+    }
+    .dark .mobile-bottom-nav {
+      background: rgba(15,23,42,0.92);
+      border-top: 1px solid rgba(51,65,85,0.15);
+    }
+    .mobile-bottom-nav-inner {
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .mobile-bottom-nav-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      padding: 6px 12px;
+      border-radius: 12px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      min-width: 64px;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .mobile-bottom-nav-btn span.material-symbols-outlined {
+      font-size: 22px;
+    }
+    .mobile-bottom-nav-btn .nav-label {
+      font-size: 10px;
+      font-weight: 600;
+      font-family: 'Inter', sans-serif;
+      line-height: 1.1;
+      text-align: center;
+    }
+    .mobile-bottom-nav-btn.active {
+      background: rgba(79,89,164,0.12);
+    }
+    .mobile-bottom-nav-btn.active span.material-symbols-outlined {
+      color: #4f59a4;
+      font-variation-settings: 'FILL' 1;
+    }
+    .mobile-bottom-nav-btn.active .nav-label {
+      color: #4f59a4;
+    }
+    .dark .mobile-bottom-nav-btn.active {
+      background: rgba(181,188,255,0.12);
+    }
+    .dark .mobile-bottom-nav-btn.active span.material-symbols-outlined,
+    .dark .mobile-bottom-nav-btn.active .nav-label {
+      color: #b5bcff;
+    }
+    .mobile-bottom-nav-btn .nav-label {
+      color: #9a9d9f;
+    }
+    .dark .mobile-bottom-nav-btn .nav-label {
+      color: #64748b;
+    }
+    .mobile-bottom-nav-btn span.material-symbols-outlined {
+      color: #9a9d9f;
+    }
+    .dark .mobile-bottom-nav-btn span.material-symbols-outlined {
+      color: #64748b;
+    }
+
+    /* Income button in bottom nav */
+    .mobile-bottom-nav-btn.income-btn .material-symbols-outlined {
+      font-size: 24px;
+    }
+    .mobile-bottom-nav-btn.income-btn.active {
+      background: rgba(16,185,129,0.12);
+    }
+    .mobile-bottom-nav-btn.income-btn.active span.material-symbols-outlined,
+    .mobile-bottom-nav-btn.income-btn.active .nav-label {
+      color: #10b981;
+    }
+
+    /* Show bottom nav on mobile */
+    @media (max-width: 639px) {
+      .mobile-bottom-nav {
+        display: block;
+      }
+      main {
+        padding-bottom: 80px;
+      }
+      /* Hide top mode buttons on mobile */
+      .top-mode-desktop {
+        display: none !important;
+      }
+      /* Кнопка установки PWA — только для рабочего стола */
+      #install-btn {
+        display: none !important;
+      }
+      /* Кнопка «Учёт доходов» в шапке — только для ПК (на смартфоне её дублирует нижняя панель) */
+      #income-toggle {
+        display: none !important;
+      }
+      /* Кнопка «группа по умолчанию» в шапке — только для ПК (на мобильном её дублирует нижняя панель) */
+      #nav-default-group {
+        display: none !important;
+      }
+      /* В режиме основной группы на смартфоне убираем hero-секцию,
+         чтобы расписание прижималось к шапке сайта */
+      body.default-group-mode #hero-section {
+        display: none !important;
+      }
+      body.default-group-mode #schedule-header-row {
+        margin-top: 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+      }
+      @media (min-width: 640px) {
+        body.default-group-mode #schedule-header-row {
+          margin-top: 0.75rem !important;
+          margin-bottom: 0.75rem !important;
+        }
+      }
+    }
+
+    /* Tablet optimizations */
+    @media (min-width: 640px) and (max-width: 1023px) {
+      .mobile-bottom-nav {
+        display: none;
+      }
+      main {
+        padding-bottom: 0;
+      }
+    }
+    @media (min-width: 1024px) {
+      .mobile-bottom-nav {
+        display: none;
+      }
+      main {
+        padding-bottom: 0;
+      }
+    }
+
+    /* Responsive card improvements */
+    @media (max-width: 480px) {
+      .lesson-card {
+        padding: 14px !important;
+      }
+      .lesson-card .text-lg {
+        font-size: 0.9rem !important;
+      }
+      .lesson-card h3.text-lg {
+        font-size: 0.95rem !important;
+      }
+      .min-w-\[64px\] {
+        min-width: 52px !important;
+      }
+      .lesson-card .gap-6 {
+        gap: 10px !important;
+      }
+    }
+
+    /* Day strip mobile improvements */
+    @media (max-width: 480px) {
+      #day-strip {
+        overflow-x: hidden !important;
+      }
+      #day-strip .flex {
+        gap: 1px !important;
+      }
+      #day-strip .flex > button {
+        min-width: 0 !important;
+        height: 64px !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+      }
+    }
+
+    /* Calendar grid responsive */
+    @media (max-width: 640px) {
+      #income-view-container section[aria-label="Calendar view"] {
+        min-height: unset !important;
+      }
+      #income-view-container section[aria-label="Calendar view"] > div {
+        min-height: unset !important;
+        height: auto !important;
+        flex-grow: 0 !important;
+      }
+    }
+    @media (min-width: 641px) and (max-width: 900px) {
+      #calendar-grid {
+        gap: 4px !important;
+      }
+      #calendar-grid > div {
+        min-height: 72px !important;
+        padding: 5px !important;
+      }
+    }
+
+    /* Full-screen modals on mobile */
+    @media (max-width: 480px) {
+      #income-settings-modal > div,
+      #shift-modal > div,
+      #first-time-modal > div {
+        max-width: 100% !important;
+        margin: 0 8px !important;
+        max-height: 85vh !important;
+        padding: 20px !important;
+      }
+      #income-settings-modal,
+      #shift-modal,
+      #first-time-modal {
+        padding: 8px !important;
+        align-items: center !important;
+      }
+    }
+
+    /* Schedule toolbar mobile */
+    @media (max-width: 480px) {
+      #schedule-toolbar .flex {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      #schedule-toolbar .flex > * {
+        flex-shrink: 0;
+      }
+      #exams-toggle {
+        padding: 6px 10px !important;
+        font-size: 11px !important;
+      }
+      #exams-toggle span.material-symbols-outlined {
+        font-size: 16px !important;
+      }
+      .week-nav-btn {
+        padding: 6px !important;
+      }
+      #week-label {
+        font-size: 12px !important;
+      }
+    }
+
+    /* Schedule grid for tablet */
+    @media (max-width: 1023px) {
+      .schedule-main-grid {
+        grid-template-columns: 1fr !important;
+      }
+      .schedule-sidebar {
+        display: none;
+      }
+    }
+
+    /* Hero section mobile */
+    @media (max-width: 480px) {
+      #hero-section {
+        padding-top: 8px !important;
+        padding-bottom: 16px !important;
+      }
+      #hero-section .w-full.max-w-2xl {
+        padding: 16px !important;
+      }
+      #hero-section .max-w-3xl {
+        margin-bottom: 8px !important;
+      }
+      #hero-section .max-w-3xl p {
+        font-size: 13px !important;
+      }
+    }
+
+    /* Income view mobile */
+    @media (max-width: 640px) {
+      #income-view-container .grid {
+        grid-template-columns: 1fr !important;
+      }
+      #income-view-container .lg\:col-span-8,
+      #income-view-container .lg\:col-span-4 {
+        grid-column: span 1 / span 1 !important;
+      }
+    }
+
+    /* Nav bar mobile tweaks */
+    @media (max-width: 480px) {
+      nav .px-4 {
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+      }
+      nav .py-4 {
+        padding-top: 12px !important;
+        padding-bottom: 12px !important;
+      }
+      nav .text-xl {
+        font-size: 1rem !important;
+      }
+    }
+
+    /* Одинаковый размер кнопок-иконок в шапке на смартфоне (кроме #income-toggle,
+       которая на мобильных полностью скрыта — её дублирует нижняя панель) */
+    @media (max-width: 639px) {
+      #nav-edit-group,
+      #theme-toggle {
+        width: 40px;
+        height: 40px;
+        padding: 0 !important;
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+      }
+      #nav-edit-group .material-symbols-outlined,
+      #theme-toggle .material-symbols-outlined {
+        font-size: 22px !important;
+      }
+    }
+
+    /* Touch-friendly improvements */
+    @media (pointer: coarse) {
+      .lesson-card {
+        cursor: default;
+      }
+      .autocomplete-suggestion {
+        padding: 14px 16px;
+      }
+      select, input, button {
+        font-size: 16px !important;
+      }
+      #day-strip .flex > button {
+        -webkit-tap-highlight-color: transparent;
+      }
+      .mobile-bottom-nav-btn {
+        -webkit-tap-highlight-color: transparent;
+      }
+    }
+
+    /* Prevent iOS zoom on focus */
+    @supports (-webkit-touch-callout: none) {
+      select, input, textarea {
+        font-size: 16px !important;
+      }
+    }
+
+    /* Schedule title mobile */
+    @media (max-width: 480px) {
+      #schedule-title {
+        font-size: 1.25rem !important;
+      }
+      #schedule-header-row .text-xs {
+        font-size: 10px !important;
+      }
+    }
+
+    /* Income block period selector */
+    @media (max-width: 480px) {
+      #total-income-value {
+        font-size: 1.5rem !important;
+      }
+      .income-period-nav button {
+        padding: 8px !important;
+      }
+      #income-month-label {
+        font-size: 11px !important;
+      }
+    }
+
+    /* Settings modal mobile */
+    @media (max-width: 480px) {
+      #income-settings-modal .grid-cols-2 {
+        grid-template-columns: 1fr 1fr !important;
+        gap: 8px !important;
+      }
+      #income-settings-modal .grid-cols-3 {
+        grid-template-columns: 1fr 1fr 1fr !important;
+      }
+    }
+
+    /* Bottom nav income dot badge */
+    .bottom-nav-dot {
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      width: 10px;
+      height: 10px;
+      background: #ef4444;
+      border-radius: 50%;
+      border: 2px solid white;
+      display: none;
+    }
+    .dark .bottom-nav-dot {
+      border-color: #0f172a;
+    }
+
+    /* Кастомная анимация мигания красным для кнопки дохода при пересечении */
+    @keyframes income-blink-red {
+      0%, 100% { background-color: transparent; color: #4f59a4; box-shadow: none; transform: scale(1); }
+      15% { background-color: rgba(239, 68, 68, 0.25); color: #dc2626; box-shadow: 0 0 20px 6px rgba(239, 68, 68, 0.5); transform: scale(1.08); }
+      30% { background-color: rgba(239, 68, 68, 0.35); color: #dc2626; box-shadow: 0 0 30px 10px rgba(239, 68, 68, 0.7); transform: scale(1.12); }
+      50% { background-color: rgba(239, 68, 68, 0.15); color: #ef4444; box-shadow: 0 0 15px 4px rgba(239, 68, 68, 0.4); transform: scale(1.04); }
+    }
+    .income-blink {
+      animation: income-blink-red 1.2s ease-in-out infinite;
+      will-change: transform, background-color, color, box-shadow;
+      border-radius: 0.5rem;
+    }
+
+    /* Подсветка стрелок переключения месяца при пересечении смен с парами в соседнем месяце */
+    @keyframes month-arrow-blink {
+      0%, 100% { box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.35); }
+      50% { box-shadow: 0 0 16px 5px rgba(239, 68, 68, 0.75); }
+    }
+    .month-arrow-alert {
+      color: #ef4444 !important;
+      background-color: rgba(239, 68, 68, 0.15) !important;
+      box-shadow: 0 0 12px 3px rgba(239, 68, 68, 0.55) !important;
+      animation: month-arrow-blink 1.2s ease-in-out infinite;
+    }
+    /* Календарь доходов: полноценный вертикальный список на телефоне (≤640px) */
+    @media (max-width: 640px) {
+      #calendar-weekdays { display: none !important; }
+      #calendar-grid {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 8px !important;
+        min-height: 0 !important;
+        flex-grow: 0 !important;
+        align-items: stretch !important;
+      }
+      #calendar-grid > div.bg-transparent { display: none !important; }
+      #calendar-grid > div:not(.bg-transparent) {
+        width: 100% !important;
+        height: auto !important;
+        min-height: 0 !important;
+        padding: 12px !important;
+        border-radius: 14px !important;
+        display: flex !important;
+        flex-direction: column !important;
+      }
+      .calendar-daynum { font-size: 20px !important; line-height: 1 !important; }
+      .calendar-weekday { font-size: 13px !important; }
+      #calendar-grid .no-scrollbar {
+        max-height: none !important;
+        overflow: visible !important;
+        gap: 4px !important;
+        margin-top: 8px !important;
+      }
+      #calendar-grid .no-scrollbar > div {
+        font-size: 12px !important;
+        padding: 3px 6px !important;
+        line-height: 1.2 !important;
+        margin-bottom: 0 !important;
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+      }
+      #calendar-grid .text-\[9px\] {
+        font-size: 13px !important;
+      }
+    }
+
+    /* === Кастомные индикаторы в полях настроек доходов и смен === */
+    /* Прячем нативные спиннеры (стрелки) и индикатор времени браузера */
+    .income-number-input,
+    .income-time-input {
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
+    .income-number-input::-webkit-outer-spin-button,
+    .income-number-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .income-time-input::-webkit-calendar-picker-indicator {
+      display: none;
+      -webkit-appearance: none;
+    }
+    /* Ведущая иконка внутри поля */
+    .field-icon {
+      color: #4f59a4;
+      opacity: 0.65;
+    }
+    .dark .field-icon {
+      color: #b5bcff;
+      opacity: 0.7;
+    }
+    /* Кастомные стрелки-степперы для числовых полей */
+    .num-stepper {
+      position: absolute;
+      right: 5px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      z-index: 2;
+    }
+    .num-stepper button {
+      width: 18px;
+      height: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      color: #4f59a4;
+      background: rgba(79, 89, 164, 0.10);
+      cursor: pointer;
+      transition: background-color 0.15s ease, transform 0.1s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .dark .num-stepper button {
+      color: #b5bcff;
+      background: rgba(181, 188, 255, 0.14);
+    }
+    .num-stepper button:hover { background: rgba(79, 89, 164, 0.22); }
+    .dark .num-stepper button:hover { background: rgba(181, 188, 255, 0.26); }
+    .num-stepper button:active { transform: scale(0.88); }
+    .num-stepper button:focus-visible { outline: 2px solid #4f59a4; outline-offset: 1px; }
+    .dark .num-stepper button:focus-visible { outline-color: #9ea8fa; }
+    .num-stepper button .material-symbols-outlined {
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    /* Лента смены в ячейке календаря доходов */
+    .shift-ribbon {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px 5px;
+      border-radius: 9999px;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28), 0 1px 2px rgba(15, 23, 42, 0.10);
+    }
+    .shift-ribbon .material-symbols-outlined {
+      font-size: 11px !important;
+      line-height: 1;
+    }
+    .shift-ribbon .ribbon-time {
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.2px;
+    }
+    .shift-ribbon .ribbon-arrow {
+      font-size: 9px !important;
+      opacity: 0.7;
+      margin: 0 1px;
+    }
+    .shift-ribbon .ribbon-hours {
+      margin-left: auto;
+      padding-left: 4px;
+      opacity: 0.92;
+    }
+    /* Кликабельное время смены в ячейке календаря — вся лента (где часы)
+       открывает ленту выбора часов и минут */
+    .shift-ribbon.shift-time-trigger {
+      cursor: pointer;
+      transition: background-color 0.15s ease, opacity 0.15s ease, filter 0.15s ease;
+    }
+    .shift-ribbon.shift-time-trigger:hover,
+    .shift-ribbon.shift-time-trigger:focus-visible {
+      filter: brightness(1.08);
+      opacity: 0.95;
+      outline: 2px solid rgba(255, 255, 255, 0.5);
+      outline-offset: 1px;
+    }
+    .dark .shift-ribbon.shift-time-trigger:hover,
+    .dark .shift-ribbon.shift-time-trigger:focus-visible {
+      outline-color: rgba(0, 0, 0, 0.35);
+    }
+
+    /* Модальное окно домашнего задания */
+    @keyframes hw-modal-in {
+      0% { opacity: 0; transform: scale(0.94) translateY(8px); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    #homework-modal:not(.hidden) > div {
+      animation: hw-modal-in 0.22s ease-out forwards;
+    }
+    #homework-modal textarea {
+      font-size: 16px; /* предотвращает зум на iOS при фокусе */
+    }
+    @media (max-width: 480px) {
+      #homework-modal > div {
+        max-width: 100% !important;
+        margin: 0 8px !important;
+        max-height: 85vh !important;
+        padding: 18px !important;
+      }
+      #homework-modal {
+        padding: 8px !important;
+        align-items: center !important;
+      }
+    }
+
+    /* Вертикальная лента выбора времени смены (часы и минуты) */
+    .vt-picker {
+      display: flex;
+      gap: 8px;
+    }
+    .vt-col {
+      position: relative;
+      flex: 1 1 0;
+      max-height: 150px;
+      overflow-y: auto;
+      scroll-snap-type: y mandatory;
+      border-radius: 12px;
+      background: rgba(79, 89, 164, 0.06);
+      padding: 56px 0;
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    .dark .vt-col { background: rgba(181, 188, 255, 0.08); }
+    .vt-col::-webkit-scrollbar { display: none; }
+    /* Полоса-индикатор выбора по центру */
+    .vt-col::before {
+      content: "";
+      position: absolute;
+      left: 5px;
+      right: 5px;
+      top: 50%;
+      transform: translateY(-50%);
+      height: 34px;
+      border-radius: 10px;
+      background: rgba(79, 89, 164, 0.14);
+      box-shadow: inset 0 0 0 1px rgba(79, 89, 164, 0.18);
+      pointer-events: none;
+    }
+    .dark .vt-col::before {
+      background: rgba(181, 188, 255, 0.16);
+      box-shadow: inset 0 0 0 1px rgba(181, 188, 255, 0.20);
+    }
+    .vt-chip {
+      display: block;
+      width: 100%;
+      text-align: center;
+      padding: 8px 0;
+      scroll-snap-align: center;
+      font-size: 13px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      color: #4f59a4;
+      cursor: pointer;
+      transition: color 0.15s ease, font-size 0.15s ease, transform 0.15s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .dark .vt-chip { color: #b5bcff; }
+    .vt-chip.vt-selected {
+      background: #4f59a4;
+      color: #ffffff;
+      font-size: 17px;
+      font-weight: 800;
+      border-radius: 9px;
+    }
+    .dark .vt-chip.vt-selected { background: #4f59a4; color: #ffffff; }
+
+    /* Компактная лента для поповера у ячейки */
+    .vt-picker.vt-compact { gap: 6px; }
+    .vt-picker.vt-compact .vt-col {
+      max-height: 104px;
+      padding: 40px 0;
+      border-radius: 10px;
+    }
+    .vt-picker.vt-compact .vt-col::before { height: 26px; border-radius: 8px; left: 4px; right: 4px; }
+    .vt-picker.vt-compact .vt-chip { font-size: 12px; padding: 6px 0; }
+    .vt-picker.vt-compact .vt-chip.vt-selected { font-size: 15px; border-radius: 8px; }
+
+    /* Поле времени в поповерах: просто часы + время, клик открывает вертикальную ленту */
+    .time-field-trigger {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(79, 89, 164, 0.06);
+      border: 1px solid rgba(172, 179, 183, 0.18);
+      color: #2d3337;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
+    }
+    .dark .time-field-trigger {
+      background: rgba(181, 188, 255, 0.08);
+      border-color: rgba(51, 65, 85, 0.6);
+      color: #e2e8f0;
+    }
+    .time-field-trigger:hover {
+      border-color: rgba(79, 89, 164, 0.5);
+      background: rgba(79, 89, 164, 0.10);
+    }
+    .dark .time-field-trigger:hover {
+      border-color: rgba(181, 188, 255, 0.5);
+      background: rgba(181, 188, 255, 0.14);
+    }
+    .time-field-trigger:focus-visible {
+      outline: 2px solid #4f59a4;
+      outline-offset: 1px;
+    }
+    .dark .time-field-trigger:focus-visible { outline-color: #9ea8fa; }
+
+    </style>
+</head>
+<body class="bg-background dark:bg-slate-950 text-on-surface dark:text-slate-200 font-body selection:bg-primary-container selection:text-on-primary-container overflow-x-hidden min-h-screen flex flex-col transition-colors duration-300">
+  
+  <!-- Навигация -->
+  <nav class="bg-surface-container-lowest/80 dark:bg-slate-900/80 backdrop-blur-md font-manrope font-bold tracking-tight top-0 sticky z-50 border-b border-outline-variant/10 box-border w-full max-w-full overflow-hidden" style="-webkit-backdrop-filter: blur(12px);">
+    <div class="flex justify-between items-center px-4 sm:px-8 py-2 sm:py-3 max-w-[1440px] mx-auto w-full box-border">
+      <div class="text-lg sm:text-xl font-extrabold text-primary dark:text-[#b5bcff]">
+        БГЭУ Расписание
+      </div>
+      
+      <div class="flex items-center gap-1 sm:gap-3">
+        <!-- Карандаш для изменения группы по умолчанию -->
+        <div id="nav-primary-group-wrapper" class="flex items-center gap-1 hidden">
+          <button id="nav-default-group" class="hidden sm:inline-flex items-center gap-1 p-1.5 sm:px-3 sm:py-2 rounded-xl text-primary/60 dark:text-[#b5bcff]/60 hover:text-primary dark:hover:text-[#b5bcff] hover:bg-primary/10 dark:hover:bg-[#b5bcff]/10 transition-all cursor-pointer" title="Моя группа по умолчанию">
+            <span class="material-symbols-outlined text-base sm:text-lg" id="nav-default-group-icon">star</span>
+            <span id="nav-default-group-label" class="text-xs sm:text-sm font-semibold"></span>
+          </button>
+          <button id="nav-edit-group" class="p-1.5 sm:p-2 rounded-xl text-primary/60 dark:text-[#b5bcff]/60 hover:text-primary dark:hover:text-[#b5bcff] hover:bg-primary/10 dark:hover:bg-[#b5bcff]/10 transition-all cursor-pointer" title="Изменить группу по умолчанию">
+            <span class="material-symbols-outlined text-base sm:text-lg">edit</span>
+          </button>
+        </div>
+        <!-- Десктопные кнопки режимов (скрыты на мобильных) -->
+        <div class="top-mode-desktop segment-track segment-track--nav hidden sm:flex bg-surface-container-low dark:bg-slate-800 shadow-sm">
+          <button id="top-mode-group" class="segment-btn-active px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold transition">По группе</button>
+          <button id="top-mode-teacher" class="segment-btn-inactive px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-on-surface-variant dark:text-slate-300 transition">По преподавателю</button>
+          <button id="top-mode-room" class="segment-btn-inactive px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-on-surface-variant dark:text-slate-300 transition">По аудитории</button>
+        </div>
+        <!-- Кнопка режима Доход (монетка) -->
+        <button id="income-toggle" class="p-1.5 sm:p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all text-primary dark:text-[#b5bcff] flex items-center justify-center relative cursor-pointer" title="Учёт доходов">
+          <span class="material-symbols-outlined text-xl sm:text-2xl">monetization_on</span>
+          <!-- Красная точка при пересечении -->
+          <span id="income-dot" class="absolute -top-0.5 -right-0.5 w-3 h-3 sm:w-3.5 sm:h-3.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-950 hidden animate-pulse shadow-[0_0_10px_3px_rgba(239,68,68,0.9)]"></span>
+        </button>
+        <!-- Кнопка переключения тёмной темы -->
+        <button id="theme-toggle" class="p-1.5 sm:p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all text-primary dark:text-primary-fixed flex items-center justify-center cursor-pointer" title="Переключить тему">
+          <span class="material-symbols-outlined" id="theme-toggle-icon">dark_mode</span>
+        </button>
+        <!-- Кнопка установки PWA (появляется, когда браузер предлагает установку) -->
+        <button id="install-btn" class="hidden p-1.5 sm:p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all text-primary dark:text-[#b5bcff] flex items-center justify-center cursor-pointer" title="Установить приложение на рабочий стол">
+          <span class="material-symbols-outlined text-xl sm:text-2xl">install_mobile</span>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Основной контент -->
+  <main class="max-w-[1440px] mx-auto px-3 sm:px-6 md:px-8 flex-grow w-full max-w-full overflow-x-hidden box-border relative">
+    <!-- Градиентное свечение на весь фон -->
+    <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+      <div class="absolute -right-20 -top-20 w-[70vw] h-[70vw] max-w-[900px] max-h-[900px] signature-gradient rounded-full blur-[150px] opacity-60"></div>
+      <div class="absolute -left-20 bottom-0 w-[50vw] h-[50vw] max-w-[600px] max-h-[600px] signature-gradient rounded-full blur-[120px] opacity-40"></div>
+    </div>
+    <div id="schedule-view-container" class="w-full">
+    <!-- Hero / Форма выбора -->
+    <section id="hero-section" class="relative pt-2 sm:pt-4 pb-4 sm:pb-8 flex flex-col items-center overflow-visible">
+      <div class="text-center max-w-3xl mb-2 sm:mb-3">
+        <p class="text-on-surface-variant dark:text-slate-400 text-sm sm:text-base max-w-xl mx-auto font-medium">
+          Выберите вашу группу или преподавателя, чтобы начать.
+        </p>
+      </div>
+
+      <!-- Виджет выбора расписания -->
+      <div class="w-full max-w-2xl bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl relative z-10 transition-all duration-300">
+        
+        <!-- Вкладки (Группа / Преподаватель / Аудитория) -->
+        <div class="segment-track bg-surface-container-low dark:bg-slate-800 mb-3 sm:mb-4">
+          <button id="tab-group" class="segment-btn-active py-2 sm:py-3 text-xs sm:text-sm font-bold text-primary dark:text-primary-container flex items-center justify-center gap-1 sm:gap-2 transition-all">
+            <span class="material-symbols-outlined text-base sm:text-lg">groups</span> 
+            <span class="hidden xs:inline">По группе</span>
+            <span class="xs:hidden">Группа</span>
+          </button>
+          <button id="tab-teacher" class="segment-btn-inactive py-2 sm:py-3 text-xs sm:text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400 hover:text-primary dark:hover:text-primary-container flex items-center justify-center gap-1 sm:gap-2 transition-all">
+            <span class="material-symbols-outlined text-base sm:text-lg">person</span> 
+            <span class="hidden xs:inline">По преподавателю</span>
+            <span class="xs:hidden">Препод.</span>
+          </button>
+          <button id="tab-room" class="segment-btn-inactive py-2 sm:py-3 text-xs sm:text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400 hover:text-primary dark:hover:text-primary-container flex items-center justify-center gap-1 sm:gap-2 transition-all">
+            <span class="material-symbols-outlined text-base sm:text-lg">meeting_room</span> 
+            <span class="hidden xs:inline">По аудитории</span>
+            <span class="xs:hidden">Ауд.</span>
+          </button>
+        </div>
+
+        <!-- Контейнер выбора группы -->
+        <div id="group-selection" class="space-y-3 sm:space-y-4">
+          <div class="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
+            <div>
+              <label for="faculty" class="block text-[10px] sm:text-xs font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Факультет</label>
+              <select id="faculty" class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 px-3 sm:px-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary">
+                <option value="-1">Выберите факультет</option>
+              </select>
+            </div>
+            <div>
+              <label for="form" class="block text-[10px] sm:text-xs font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Форма</label>
+              <select id="form" disabled class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 px-3 sm:px-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary disabled:opacity-50">
+                <option value="-1">Не выбран</option>
+              </select>
+            </div>
+            <div>
+              <label for="course" class="block text-[10px] sm:text-xs font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Курс</label>
+              <select id="course" disabled class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 px-3 sm:px-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary disabled:opacity-50">
+                <option value="-1">Выберите курс</option>
+              </select>
+            </div>
+            <div>
+              <label for="group" class="block text-[10px] sm:text-xs font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Группа</label>
+              <select id="group" disabled class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 px-3 sm:px-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary disabled:opacity-50">
+                <option value="-1">Выберите группу</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Контейнер поиска преподавателя -->
+        <div id="teacher-selection" class="hidden relative">
+          <label for="teacher-name" class="block text-[10px] sm:text-xs font-bold text-on-surface dark:text-slate-200 uppercase tracking-wider mb-1 sm:mb-2">Преподаватель</label>
+          <div class="relative">
+            <div class="absolute inset-y-0 left-0 pl-3 sm:pl-4 flex items-center pointer-events-none text-primary">
+              <span class="material-symbols-outlined text-lg sm:text-xl">search</span>
+            </div>
+            <input id="teacher-name" type="text" autocomplete="off" class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-3 sm:py-4 pl-10 sm:pl-12 pr-3 sm:pr-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 placeholder:text-on-surface-variant/40 focus:ring-2 focus:ring-primary" placeholder="Например: Петров Александр"/>
+            <div id="autocomplete-list" class="absolute top-full left-0 right-0 mt-1 sm:mt-2 bg-white dark:bg-slate-900 border border-outline-variant/10 dark:border-slate-800 rounded-xl shadow-2xl max-h-[180px] sm:max-h-[220px] overflow-y-auto z-50 hidden"></div>
+          </div>
+        </div>
+
+        <!-- Контейнер выбора аудитории -->
+        <div id="room-selection" class="hidden space-y-3 sm:space-y-4 overflow-visible">
+          <div class="relative overflow-visible z-[70]">
+            <label for="room-name" class="block text-[10px] sm:text-xs font-bold text-on-surface dark:text-slate-200 uppercase tracking-wider mb-1 sm:mb-2">Аудитория</label>
+            <div class="relative overflow-visible">
+              <div class="absolute inset-y-0 left-0 pl-3 sm:pl-4 flex items-center pointer-events-none text-primary">
+                <span class="material-symbols-outlined text-lg sm:text-xl">meeting_room</span>
+              </div>
+              <input id="room-name" type="text" autocomplete="off" class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-3 sm:py-4 pl-10 sm:pl-12 pr-3 sm:pr-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 placeholder:text-on-surface-variant/40 focus:ring-2 focus:ring-primary" placeholder="Например: 1/402"/>
+              <div id="room-autocomplete-list" class="absolute top-full left-0 right-0 mt-1 sm:mt-2 bg-white dark:bg-slate-900 border border-outline-variant/10 dark:border-slate-800 rounded-xl shadow-2xl max-h-[180px] sm:max-h-[220px] overflow-y-auto z-[100] hidden"></div>
+            </div>
+          </div>
+          <div id="room-date-wrapper" class="relative overflow-visible z-[60]">
+            <label for="room-date-display" class="block text-[10px] sm:text-xs font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Дата</label>
+            <div class="relative">
+              <input id="room-date" type="hidden" />
+              <input id="room-date-display" readonly type="text" class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 pl-3 sm:pl-4 pr-10 sm:pr-12 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 placeholder:text-on-surface-variant/40 focus:ring-2 focus:ring-primary cursor-pointer" placeholder="Выберите дату"/>
+              <button id="room-date-trigger" type="button" class="absolute inset-y-0 right-0 px-3 sm:px-4 flex items-center justify-center rounded-r-xl text-primary dark:text-primary-container hover:bg-surface-container-high dark:hover:bg-slate-800 transition-colors">
+                <span class="material-symbols-outlined text-lg sm:text-xl">calendar_month</span>
+              </button>
+            </div>
+            <div id="room-calendar" class="absolute left-0 right-0 top-full mt-1 sm:mt-2 bg-surface dark:bg-slate-950 border border-outline-variant/10 dark:border-slate-800 rounded-3xl shadow-2xl p-3 hidden z-[1000] max-w-full pointer-events-auto"></div>
+          </div>
+        </div>
+
+        <!-- Переключатель режима отображения: "По дням" / "На семестр" / "Экзамены" -->
+        <div id="period-section" class="mt-4 sm:mt-6">
+          <div class="segment-track bg-surface-container-low dark:bg-slate-800">
+            <button id="mode-days" class="segment-btn-active py-2 sm:py-2.5 text-xs sm:text-sm font-bold text-primary dark:text-primary-container flex items-center justify-center gap-1 sm:gap-1.5 transition-all">
+              <span class="material-symbols-outlined text-base sm:text-lg">calendar_view_day</span> 
+              <span class="hidden xs:inline">По дням</span>
+              <span class="xs:hidden">Дни</span>
+            </button>
+            <button id="mode-semester" class="segment-btn-inactive py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400 hover:text-primary dark:hover:text-primary-container flex items-center justify-center gap-1 sm:gap-1.5 transition-all">
+              <span class="material-symbols-outlined text-base sm:text-lg">calendar_month</span> 
+              <span class="hidden xs:inline">На семестр</span>
+              <span class="xs:hidden">Семестр</span>
+            </button>
+            <button id="mode-exams" class="segment-btn-inactive py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 flex items-center justify-center gap-1 sm:gap-1.5 transition-all">
+              <span class="material-symbols-outlined text-base sm:text-lg">fact_check</span> 
+              <span class="hidden xs:inline">Экзамены</span>
+              <span class="xs:hidden">Экз.</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Кнопка получить расписание -->
+        <button id="get-btn" class="w-full mt-4 sm:mt-6 signature-gradient text-on-primary py-3 sm:py-4 rounded-xl font-bold tracking-wide hover:opacity-90 hover:shadow-lg hover:shadow-primary/20 hover:scale-[1.01] transition-all flex items-center justify-center gap-2 text-sm sm:text-base">
+          <span>Показать расписание</span>
+          <span class="material-symbols-outlined text-base sm:text-lg">arrow_forward</span>
+        </button>
+
+      </div>
+    </section>
+
+    <!-- Секция вывода расписания -->
+    <section class="pb-16 sm:pb-20">
+      <div id="schedule-header-row" class="flex items-end justify-between mb-3 sm:mb-4 hidden">
+        <div>
+          <h2 id="schedule-title" class="font-headline text-xl sm:text-2xl md:text-3xl font-bold text-on-surface dark:text-white">...</h2>
+        </div>
+      </div>
+      <!-- Панель инструментов расписания -->
+      <div id="schedule-toolbar" class="w-full mb-3 sm:mb-4 hidden">
+        <div class="flex items-center gap-1 sm:gap-2 overflow-x-auto no-scrollbar pb-1">
+          <button id="week-prev" class="week-nav-btn px-1.5 sm:px-2 py-1 sm:py-1 rounded-lg bg-surface-container-low dark:bg-slate-800 text-primary dark:text-[#b5bcff] text-sm font-semibold hover:bg-primary/10 dark:hover:bg-[#b5bcff]/10 transition-colors flex-shrink-0" title="Предыдущая неделя">
+            <span class="material-symbols-outlined text-lg">chevron_left</span>
+          </button>
+          <span id="week-label" class="text-xs sm:text-sm font-bold text-on-surface dark:text-slate-200 whitespace-nowrap flex-shrink-0">Неделя 1</span>
+          <button id="week-next" class="week-nav-btn px-1.5 sm:px-2 py-1 sm:py-1 rounded-lg bg-surface-container-low dark:bg-slate-800 text-primary dark:text-[#b5bcff] text-sm font-semibold hover:bg-primary/10 dark:hover:bg-[#b5bcff]/10 transition-colors flex-shrink-0" title="Следующая неделя">
+            <span class="material-symbols-outlined text-lg">chevron_right</span>
+          </button>
+          <button id="exams-toggle" class="ml-1 px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl text-xs sm:text-sm font-semibold border-2 border-rose-400/60 text-rose-600 dark:text-rose-400 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/50 transition-all flex items-center gap-1 sm:gap-1.5 shadow-sm flex-shrink-0" title="Режим экзаменов">
+            <span class="material-symbols-outlined text-base sm:text-lg">fact_check</span> 
+            <span class="hidden xs:inline">Экзамены</span>
+            <span class="xs:hidden">Экз.</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Лента дней -->
+      <div id="day-strip-container" class="w-full mb-4 sm:mb-6 hidden">
+        <div id="day-strip" class="overflow-x-auto no-scrollbar -mx-1 sm:mx-0 px-1 sm:px-0">
+          <div class="flex gap-1.5 sm:gap-2 justify-center"></div>
+        </div>
+      </div>
+
+      <div class="schedule-main-grid grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-8">
+        <!-- Левая часть: список занятий -->
+        <div class="lg:col-span-8 space-y-4 sm:space-y-6" id="schedule-container">
+          <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 sm:p-8 text-center border border-outline-variant/10 dark:border-slate-800 text-on-surface-variant/50 text-sm sm:text-base">
+            Для просмотра расписания выберите параметры выше и нажмите «Показать расписание».
+          </div>
+        </div>
+
+        <!-- Правая часть: баннер и инфо-блок (скрыт на планшетах и телефонах) -->
+        <div class="schedule-sidebar lg:col-span-4 space-y-6 sm:space-y-8">
+          <div class="bg-surface-container-low dark:bg-slate-900 rounded-xl p-6 sm:p-8 flex flex-col items-center text-center border border-outline-variant/10 dark:border-slate-800">
+            <div class="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white dark:bg-slate-800 mb-3 sm:mb-4 flex items-center justify-center shadow-sm">
+              <span class="material-symbols-outlined text-2xl sm:text-3xl text-primary dark:text-primary-fixed" style="font-variation-settings: 'FILL' 1;">calendar_today</span>
+            </div>
+            <h4 class="text-base sm:text-lg font-bold text-on-surface dark:text-white mb-1">Предстоящие экзамены</h4>
+            <p class="text-on-surface-variant dark:text-slate-400 text-xs mb-3 sm:mb-4">График проведения зачётно-экзаменационных сессий БГЭУ</p>
+            <a href="https://bseu.by/schedule/" target="_blank" class="w-full py-2.5 sm:py-3 rounded-xl border border-primary/20 dark:border-slate-800 text-primary dark:text-[#b5bcff] text-xs sm:text-sm font-bold hover:bg-primary/5 transition-all text-center">Смотреть на сайте БГЭУ</a>
+          </div>
+
+        </div>
+      </div>
+    </section>
+    </div><!-- #schedule-view-container -->
+
+    <!-- Панель учёта доходов -->
+    <div id="income-view-container" class="hidden w-full space-y-3 sm:space-y-4 pt-2 sm:pt-4 mb-8 sm:mb-12">
+      <div class="flex justify-between items-center shrink-0">
+        <div class="flex items-center gap-2 sm:gap-3">
+          <span class="material-symbols-outlined text-2xl sm:text-3xl text-primary dark:text-[#b5bcff]">monetization_on</span>
+          <h2 class="font-headline text-xl sm:text-2xl md:text-3xl font-bold text-on-surface dark:text-white">Учёт рабочего времени</h2>
+        </div>
+        <button id="income-settings-btn" aria-label="Settings" class="p-1.5 sm:p-2 rounded-full bg-primary/10 dark:bg-[#b5bcff]/10 hover:bg-primary/20 dark:hover:bg-[#b5bcff]/20 shadow-sm hover:shadow transition-all duration-200 text-primary dark:text-[#b5bcff] focus:outline-none focus:ring-2 focus:ring-primary h-10 w-10 sm:h-11 sm:w-11 flex items-center justify-center border border-primary/20 dark:border-[#b5bcff]/25 active:scale-95 cursor-pointer">
+          <span class="material-symbols-outlined text-xl sm:text-2xl" style="font-variation-settings: 'FILL' 1;">settings</span>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-6 items-stretch">
+        <!-- Календарь -->
+        <section aria-label="Calendar view" class="lg:col-span-8 flex flex-col h-full min-h-[350px] sm:min-h-[500px]">
+          <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-2xl shadow-xl p-3 sm:p-6 flex-grow flex flex-col border border-outline-variant/10 dark:border-slate-800/80 h-full min-h-[300px] sm:min-h-[400px]">
+            <div class="flex justify-between items-center mb-3 sm:mb-4 shrink-0">
+              <button id="calendar-prev-month" class="bg-primary/10 hover:bg-primary/20 text-primary dark:text-[#b5bcff] p-1.5 sm:p-2 rounded-xl transition-colors active:scale-95 cursor-pointer flex items-center justify-center">
+                <span class="material-symbols-outlined text-lg sm:text-xl">chevron_left</span>
+              </button>
+              <h2 id="calendar-month-year" class="text-sm sm:text-base md:text-lg font-bold text-on-surface dark:text-white tracking-tight text-center">Период...</h2>
+              <button id="calendar-next-month" class="bg-primary/10 hover:bg-primary/20 text-primary dark:text-[#b5bcff] p-1.5 sm:p-2 rounded-xl transition-colors active:scale-95 cursor-pointer flex items-center justify-center">
+                <span class="material-symbols-outlined text-lg sm:text-xl">chevron_right</span>
+              </button>
+            </div>
+            <div id="calendar-weekdays" class="grid grid-cols-7 gap-1 sm:gap-2 mb-1 sm:mb-2 text-center text-[10px] sm:text-xs font-bold text-on-surface-variant/60 dark:text-slate-400 shrink-0">
+              <div>Пн</div><div>Вт</div><div>Ср</div><div>Чт</div><div>Пт</div><div>Сб</div><div>Вс</div>
+            </div>
+            <div id="calendar-grid" class="grid grid-cols-7 gap-1 sm:gap-2 min-h-[250px] sm:min-h-[300px]"></div>
+          </div>
+        </section>
+
+        <!-- Статистика и графики -->
+        <aside aria-label="Summary and Charts" class="lg:col-span-4 flex flex-col gap-3 sm:gap-5 h-full">
+          <!-- Блок доходов -->
+          <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-2xl shadow-xl p-4 sm:p-6 border border-outline-variant/10 dark:border-slate-800/80 flex flex-col justify-between shrink-0">
+            <div>
+              <h3 class="text-sm font-bold text-on-surface dark:text-white mb-2 sm:mb-3 pb-1 border-b border-outline-variant/10 dark:border-slate-800">Доход за период</h3>
+              <div class="flex justify-between items-center bg-surface-container-low dark:bg-slate-800/50 rounded-xl p-1.5 sm:p-2 mb-3 sm:mb-4 w-full border border-outline-variant/5">
+                <button id="income-prev-period" class="bg-primary/10 hover:bg-primary/20 text-primary dark:text-[#b5bcff] p-1 sm:p-1.5 rounded-lg transition-colors active:scale-95 cursor-pointer flex items-center justify-center">
+                  <span class="material-symbols-outlined text-sm">chevron_left</span>
+                </button>
+                <span id="income-month-label" class="text-xs sm:text-sm font-bold text-on-surface dark:text-slate-200 text-center flex-grow mx-1 sm:mx-2">Период</span>
+                <button id="income-next-period" class="bg-primary/10 hover:bg-primary/20 text-primary dark:text-[#b5bcff] p-1 sm:p-1.5 rounded-lg transition-colors active:scale-95 cursor-pointer flex items-center justify-center">
+                  <span class="material-symbols-outlined text-sm">chevron_right</span>
+                </button>
+              </div>
+              
+              <div id="income-display-area" class="text-center mb-3 sm:mb-4 min-h-[40px] sm:min-h-[50px] flex items-center justify-center">
+                <div id="total-income-value" class="text-xl sm:text-2xl md:text-3xl font-extrabold text-emerald-500 dark:text-emerald-400 tracking-tighter">0.00 BYN</div>
+              </div>
+            </div>
+            
+            <hr class="border-t border-dashed border-outline-variant/20 dark:border-slate-800 mb-3 sm:mb-4"/>
+            
+            <div class="space-y-3 sm:space-y-4">
+              <div class="flex justify-between items-center">
+                <span class="text-[10px] sm:text-xs text-on-surface-variant/80 dark:text-slate-400 font-medium">Разделять по валютам</span>
+                <label class="relative inline-flex items-center cursor-pointer select-none">
+                  <input type="checkbox" id="multicurrency-toggle" class="sr-only peer"/>
+                  <div class="w-8 sm:w-9 h-[18px] sm:h-5 bg-surface-container-high dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3.5 sm:after:h-4 after:w-3.5 sm:after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                </label>
+              </div>
+              
+              <div>
+                <h4 class="text-[10px] font-bold text-on-surface-variant/60 dark:text-slate-500 uppercase tracking-wider mb-1 sm:mb-2">Детализация:</h4>
+                <ul id="income-by-jobs" class="space-y-1 sm:space-y-2 max-h-[100px] sm:max-h-[120px] overflow-y-auto no-scrollbar pr-0.5"></ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Блок графика -->
+          <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-2xl shadow-xl p-4 sm:p-6 border border-outline-variant/10 dark:border-slate-800/80 flex-grow flex flex-col min-h-[200px] sm:min-h-[250px] overflow-hidden">
+            <h3 class="text-sm font-bold text-on-surface dark:text-white mb-2 sm:mb-3 pb-1 border-b border-outline-variant/10 dark:border-slate-800 shrink-0">
+              График доходов <span id="graph-currency-badge" class="text-primary dark:text-[#b5bcff] font-extrabold text-[10px] sm:text-xs ml-1">(BYN)</span>
+            </h3>
+            <div class="flex-grow relative w-full h-full min-h-0">
+              <canvas id="incomeChart"></canvas>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </main>
+
+  <!-- Модальное окно настроек доходов -->
+  <div id="income-settings-modal" class="fixed inset-0 bg-slate-900/60 z-[100] hidden items-center justify-center p-3 sm:p-4 backdrop-blur-md transition-all duration-300 opacity-0">
+    <div class="bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 dark:border-slate-800 rounded-3xl shadow-2xl w-full max-w-md p-5 sm:p-6 md:p-8 max-h-[90vh] overflow-y-auto no-scrollbar transform scale-95 transition-all duration-300">
+      <div class="flex justify-between items-center border-b border-outline-variant/10 dark:border-slate-800 pb-2 sm:pb-3 mb-3 sm:mb-4">
+        <h2 class="text-base sm:text-lg font-bold text-on-surface dark:text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-primary dark:text-[#b5bcff]">settings</span>
+          <span>Настройки доходов</span>
+        </h2>
+        <button id="close-income-settings-btn" class="text-on-surface-variant/60 hover:text-on-surface dark:text-slate-400 dark:hover:text-white text-xl sm:text-2xl font-light leading-none cursor-pointer">&times;</button>
+      </div>
+      
+      <div class="mb-3 sm:mb-4 grid grid-cols-2 gap-2 sm:gap-4">
+        <div>
+          <label for="currency-select" class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Валюта</label>
+          <select id="currency-select" class="w-full text-sm sm:text-base md:text-xs bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2 sm:py-2.5 px-2 sm:px-3 font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary">
+            <option value="BYN">BYN</option><option value="RUB">RUB</option><option value="USD">USD</option><option value="EUR">EUR</option>
+          </select>
+        </div>
+        <div>
+          <label for="period-start-day" class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">День старта</label>
+          <div class="relative flex items-center">
+            <span class="material-symbols-outlined field-icon absolute left-2.5 sm:left-3 text-base pointer-events-none">calendar_view_day</span>
+            <input type="number" id="period-start-day" value="1" min="1" max="31" data-stepper class="income-number-input w-full text-sm sm:text-base md:text-xs bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2 sm:py-2.5 pl-8 sm:pl-9 pr-9 sm:pr-10 font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary">
+            <div class="num-stepper">
+              <button type="button" data-step="up" aria-label="Увеличить день старта"><span class="material-symbols-outlined">arrow_drop_up</span></button>
+              <button type="button" data-step="down" aria-label="Уменьшить день старта"><span class="material-symbols-outlined">arrow_drop_down</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mb-4 sm:mb-6 bg-primary/5 dark:bg-[#b5bcff]/5 p-3 sm:p-4 rounded-2xl border border-primary/10 dark:border-[#b5bcff]/10">
+        <label class="block text-[10px] font-bold text-primary dark:text-[#b5bcff] uppercase tracking-wider mb-1 sm:mb-2">Фиксированный оклад</label>
+          <div class="grid grid-cols-3 gap-1 sm:gap-2">
+            <select id="salary-currency" class="w-full text-sm sm:text-base md:text-xs bg-surface-container-lowest dark:bg-slate-800 border border-outline-variant/10 dark:border-slate-750 rounded-xl py-2 sm:py-2.5 px-1 sm:px-2 font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary">
+              <option value="BYN">BYN</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="RUB">RUB</option>
+            </select>
+            <div class="col-span-2 relative flex items-center">
+              <span class="material-symbols-outlined field-icon absolute left-2.5 sm:left-3 text-base pointer-events-none">payments</span>
+              <input type="number" id="salary-amount" value="0" min="0" step="0.01" data-step="10" data-stepper class="income-number-input w-full text-sm sm:text-base md:text-sm bg-surface-container-lowest dark:bg-slate-800 border border-outline-variant/10 dark:border-slate-700 rounded-xl py-2 sm:py-2.5 pl-8 sm:pl-9 pr-9 sm:pr-10 font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary" placeholder="Сумма оклада">
+              <div class="num-stepper">
+                <button type="button" data-step="up" aria-label="Увеличить оклад"><span class="material-symbols-outlined">arrow_drop_up</span></button>
+                <button type="button" data-step="down" aria-label="Уменьшить оклад"><span class="material-symbols-outlined">arrow_drop_down</span></button>
+              </div>
+            </div>
+          </div>
+      </div>
+
+      <div class="grid grid-cols-3 gap-1 sm:gap-2 bg-surface-container-low dark:bg-slate-800/60 p-2 sm:p-3 rounded-2xl border border-outline-variant/5 text-center text-[10px] sm:text-xs font-semibold text-on-surface-variant dark:text-slate-300 mb-4 sm:mb-6">
+        <div id="usd" class="truncate">USD: --</div>
+        <div id="eur" class="truncate">EUR: --</div>
+        <div id="rub" class="truncate">RUB: --</div>
+      </div>
+
+      <h3 class="text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-2 sm:mb-3 pb-1 border-b border-dashed border-outline-variant/20 dark:border-slate-800">Добавить новую работу</h3>
+      <form id="job-form" class="space-y-2 sm:space-y-3">
+        <div>
+          <input type="text" id="job-name" placeholder="Название работы" required class="w-full text-sm sm:text-base md:text-sm bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2 sm:py-2.5 px-3 sm:px-4 font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary">
+        </div>
+        <div class="grid grid-cols-3 gap-1 sm:gap-2">
+          <select id="job-currency" class="w-full text-sm sm:text-base md:text-xs bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2 sm:py-2.5 px-1 sm:px-2 font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary">
+            <option value="BYN">BYN</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="RUB">RUB</option>
+          </select>
+          <div class="col-span-2 relative flex items-center">
+            <span class="material-symbols-outlined field-icon absolute left-2.5 sm:left-3 text-base pointer-events-none">speed</span>
+            <input type="number" id="job-rate" placeholder="Ставка в час" required min="0" step="0.01" data-step="0.5" data-stepper class="income-number-input w-full text-sm sm:text-base md:text-sm bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2 sm:py-2.5 pl-8 sm:pl-9 pr-9 sm:pr-10 font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary">
+            <div class="num-stepper">
+              <button type="button" data-step="up" aria-label="Увеличить ставку"><span class="material-symbols-outlined">arrow_drop_up</span></button>
+              <button type="button" data-step="down" aria-label="Уменьшить ставку"><span class="material-symbols-outlined">arrow_drop_down</span></button>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center justify-between bg-surface-container-low dark:bg-slate-800/60 p-2 sm:p-2.5 rounded-xl border border-outline-variant/5">
+          <span class="text-[10px] sm:text-xs text-on-surface-variant/80 dark:text-slate-400">Цвет карточки:</span>
+          <input type="color" id="job-color" value="#98A2F3" class="w-14 sm:w-16 h-7 sm:h-8 p-0 border border-outline-variant/20 dark:border-slate-700 rounded-lg cursor-pointer bg-transparent">
+        </div>
+        <button type="submit" class="w-full signature-gradient text-on-primary font-bold text-[11px] sm:text-xs py-2 sm:py-3 rounded-xl shadow-md hover:opacity-90 active:scale-[0.99] transition-all cursor-pointer">+ Добавить работу</button>
+      </form>
+
+      <div id="jobs-list" class="mt-3 sm:mt-4 space-y-1.5 sm:space-y-2 max-h-[120px] sm:max-h-[150px] overflow-y-auto no-scrollbar pr-0.5"></div>
+    </div>
+  </div>
+
+  <!-- Модальное окно смен (добавление/редактирование смены) -->
+  <div id="shift-modal" class="fixed inset-0 bg-slate-900/60 z-[100] hidden items-center justify-center p-3 sm:p-4 backdrop-blur-md transition-all duration-300 opacity-0">
+    <div class="bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 dark:border-slate-800 rounded-3xl shadow-2xl w-full max-w-sm p-5 sm:p-6 md:p-8 max-h-[90vh] overflow-y-auto no-scrollbar transform scale-95 transition-all duration-300">
+      <div class="flex justify-between items-center border-b border-outline-variant/10 dark:border-slate-800 pb-2 sm:pb-3 mb-3 sm:mb-4">
+        <h3 id="modal-date-title" class="text-sm font-bold text-on-surface dark:text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-primary dark:text-[#b5bcff]">calendar_today</span>
+          <span>Смены</span>
+        </h3>
+        <button id="close-shift-modal-btn" class="text-on-surface-variant/60 hover:text-on-surface dark:text-slate-400 dark:hover:text-white text-xl sm:text-2xl font-light leading-none cursor-pointer">&times;</button>
+      </div>
+      
+      <div id="current-day-shifts" class="space-y-1.5 sm:space-y-2 max-h-[120px] sm:max-h-[150px] overflow-y-auto no-scrollbar pr-0.5 mb-3 sm:mb-4"></div>
+
+      <!-- Предупреждение о пересечении -->
+      <div id="modal-intersection-warning" class="p-2 sm:p-3 bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 rounded-xl text-[11px] sm:text-xs font-semibold text-rose-600 dark:text-rose-400 hidden flex items-center gap-2 mb-3 sm:mb-4">
+        <span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0"></span>
+        <span>Пересечение с занятиями!</span>
+        <button type="button" onclick="dismissIntersectionForDay()" class="ml-auto text-[10px] font-bold underline underline-offset-2 hover:opacity-70 cursor-pointer whitespace-nowrap">Скрыть на этот день</button>
+      </div>
+      <div id="modal-intersection-muted" class="p-2 sm:p-3 bg-surface-container-low dark:bg-slate-800/40 border border-outline-variant/15 dark:border-slate-800 rounded-xl text-[11px] sm:text-xs font-semibold text-on-surface-variant/70 dark:text-slate-400 hidden flex items-center gap-2 mb-3 sm:mb-4">
+        <span>Уведомление о пересечении скрыто для этого дня.</span>
+        <button type="button" onclick="showIntersectionForDay()" class="ml-auto text-[10px] font-bold text-primary dark:text-[#b5bcff] underline underline-offset-2 hover:opacity-70 cursor-pointer whitespace-nowrap">Показать</button>
+      </div>
+
+      <h3 class="text-[10px] font-bold text-on-surface-variant/60 dark:text-slate-500 uppercase tracking-wider mb-2 pt-2 sm:pt-3 border-t border-dashed border-outline-variant/20 dark:border-slate-800">Новая смена</h3>
+      <form id="shift-form" class="space-y-2 sm:space-y-3">
+        <input type="hidden" id="shift-date">
+        <div>
+          <label class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1.5">Какая работа в этот день</label>
+          <div id="job-selector-list" class="space-y-1.5 max-h-[170px] overflow-y-auto no-scrollbar pr-0.5"></div>
+          <input type="hidden" id="selected-job-id" required>
+        </div>
+        <div class="space-y-4">
+          <input type="hidden" id="shift-start" value="09:00">
+          <input type="hidden" id="shift-end" value="18:00">
+          <div>
+            <label class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-2">Начало смены</label>
+            <div class="vt-picker" data-input="shift-start">
+              <div class="vt-col vt-hours"></div>
+              <div class="vt-col vt-mins"></div>
+            </div>
+          </div>
+          <div>
+            <label class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-2">Конец смены</label>
+            <div class="vt-picker" data-input="shift-end">
+              <div class="vt-col vt-hours"></div>
+              <div class="vt-col vt-mins"></div>
+            </div>
+          </div>
+        </div>
+        <button type="submit" class="w-full signature-gradient text-on-primary font-bold text-[11px] sm:text-xs py-2 sm:py-3 rounded-xl shadow-md transition-all active:scale-[0.99] cursor-pointer">Сохранить смену</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Компактный поповер выбора времени смены (появляется при клике на ячейку) -->
+  <div id="time-popover" class="fixed top-0 left-0 z-[110] hidden">
+    <div class="fixed bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 dark:border-slate-800 rounded-2xl shadow-2xl p-4 w-[340px] max-h-[88vh] overflow-y-auto no-scrollbar">
+      <div class="flex justify-between items-center mb-2">
+        <div class="flex items-center gap-1.5 text-xs font-bold text-on-surface dark:text-white">
+          <span class="material-symbols-outlined text-primary dark:text-[#b5bcff] text-base">schedule</span>
+          <span id="popover-date-title">Смена</span>
+        </div>
+        <button id="close-time-popover" class="text-on-surface-variant/60 hover:text-on-surface dark:text-slate-400 dark:hover:text-white text-lg font-light leading-none cursor-pointer">&times;</button>
+      </div>
+
+      <div id="popover-intersection-warning" class="p-2.5 bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 rounded-xl flex items-center gap-2 mb-2">
+        <span class="material-symbols-outlined text-rose-500 text-base shrink-0">warning</span>
+        <span class="text-[11px] font-semibold text-rose-700 dark:text-rose-300 flex-1 leading-tight">Пересечение с занятиями!</span>
+        <button type="button" id="popover-dismiss-intersection" class="shrink-0 text-[10px] font-bold text-rose-600 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/40 hover:bg-rose-200 dark:hover:bg-rose-900/70 border border-rose-200 dark:border-rose-800 rounded-lg px-2 py-1 cursor-pointer transition-colors">Скрыть</button>
+      </div>
+      <div id="popover-intersection-muted" class="p-2.5 bg-surface-container-low dark:bg-slate-800/40 border border-outline-variant/15 dark:border-slate-800 rounded-xl flex items-center gap-2 mb-2">
+        <span class="material-symbols-outlined text-on-surface-variant/60 dark:text-slate-400 text-base shrink-0">visibility_off</span>
+        <span class="text-[11px] font-semibold text-on-surface-variant/70 dark:text-slate-400 flex-1 leading-tight">Скрыто для этого дня</span>
+        <button type="button" id="popover-show-intersection" class="shrink-0 text-[10px] font-bold text-primary dark:text-[#b5bcff] bg-primary/10 dark:bg-[#b5bcff]/10 hover:bg-primary/20 dark:hover:bg-[#b5bcff]/20 border border-primary/20 dark:border-[#b5bcff]/25 rounded-lg px-2 py-1 cursor-pointer transition-colors">Показать</button>
+      </div>
+
+      <div id="popover-day-shifts" class="space-y-1 max-h-[84px] overflow-y-auto no-scrollbar mb-2"></div>
+
+      <div class="mb-2">
+        <label class="block text-[9px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1">Работа</label>
+        <div id="popover-job-list" class="flex flex-wrap gap-1"></div>
+        <input type="hidden" id="popover-job-id" required>
+      </div>
+
+      <div class="space-y-2">
+        <input type="hidden" id="popover-shift-start" value="09:00">
+        <input type="hidden" id="popover-shift-end" value="18:00">
+        <div>
+          <label class="block text-[9px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1">Начало смены</label>
+          <button type="button" data-time-toggle="popover-start-picker" class="time-field-trigger">
+            <span class="material-symbols-outlined text-primary dark:text-[#b5bcff] text-base">schedule</span>
+            <span id="popover-start-display" class="font-bold text-sm tabular-nums">09:00</span>
+          </button>
+          <div id="popover-start-picker" class="vt-picker-wrap hidden mt-1">
+            <div class="vt-picker vt-compact" data-input="popover-shift-start" data-display="popover-start-display">
+              <div class="vt-col vt-hours"></div>
+              <div class="vt-col vt-mins"></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <label class="block text-[9px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1">Конец смены</label>
+          <button type="button" data-time-toggle="popover-end-picker" class="time-field-trigger">
+            <span class="material-symbols-outlined text-primary dark:text-[#b5bcff] text-base">schedule</span>
+            <span id="popover-end-display" class="font-bold text-sm tabular-nums">18:00</span>
+          </button>
+          <div id="popover-end-picker" class="vt-picker-wrap hidden mt-1">
+            <div class="vt-picker vt-compact" data-input="popover-shift-end" data-display="popover-end-display">
+              <div class="vt-col vt-hours"></div>
+              <div class="vt-col vt-mins"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button id="popover-save" class="w-full mt-3 signature-gradient text-on-primary font-bold text-[11px] py-2 rounded-xl shadow-md transition-all active:scale-[0.99] cursor-pointer">Сохранить смену</button>
+    </div>
+  </div>
+
+  <!-- Поповер быстрого выбора времени смены (появляется при клике на время в ячейке) -->
+  <div id="shift-time-popover" class="fixed top-0 left-0 z-[115] hidden">
+    <div class="fixed bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 dark:border-slate-800 rounded-2xl shadow-2xl p-4 w-[340px] max-h-[88vh] overflow-y-auto no-scrollbar">
+      <div class="flex justify-between items-center mb-2">
+        <div class="flex items-center gap-1.5 text-xs font-bold text-on-surface dark:text-white">
+          <span class="material-symbols-outlined text-primary dark:text-[#b5bcff] text-base">schedule</span>
+          <span id="shift-time-popover-title">Время смены</span>
+        </div>
+        <button id="close-shift-time-popover" class="text-on-surface-variant/60 hover:text-on-surface dark:text-slate-400 dark:hover:text-white text-lg font-light leading-none cursor-pointer">&times;</button>
+      </div>
+
+      <div class="space-y-2">
+        <input type="hidden" id="shift-time-start" value="09:00">
+        <input type="hidden" id="shift-time-end" value="18:00">
+        <div>
+          <label class="block text-[9px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1">Начало</label>
+          <button type="button" data-time-toggle="shift-time-start-picker" class="time-field-trigger">
+            <span class="material-symbols-outlined text-primary dark:text-[#b5bcff] text-base">schedule</span>
+            <span id="shift-time-start-display" class="font-bold text-sm tabular-nums">09:00</span>
+          </button>
+          <div id="shift-time-start-picker" class="vt-picker-wrap hidden mt-1">
+            <div class="vt-picker vt-compact" data-input="shift-time-start" data-display="shift-time-start-display">
+              <div class="vt-col vt-hours"></div>
+              <div class="vt-col vt-mins"></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <label class="block text-[9px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1">Конец</label>
+          <button type="button" data-time-toggle="shift-time-end-picker" class="time-field-trigger">
+            <span class="material-symbols-outlined text-primary dark:text-[#b5bcff] text-base">schedule</span>
+            <span id="shift-time-end-display" class="font-bold text-sm tabular-nums">18:00</span>
+          </button>
+          <div id="shift-time-end-picker" class="vt-picker-wrap hidden mt-1">
+            <div class="vt-picker vt-compact" data-input="shift-time-end" data-display="shift-time-end-display">
+              <div class="vt-col vt-hours"></div>
+              <div class="vt-col vt-mins"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button id="shift-time-save" class="w-full mt-3 signature-gradient text-on-primary font-bold text-[11px] py-2 rounded-xl shadow-md transition-all active:scale-[0.99] cursor-pointer">Сохранить время</button>
+    </div>
+  </div>
+
+  <!-- Подвал -->
+  <footer class="bg-surface dark:bg-slate-950 py-6 sm:py-8 border-t border-outline-variant/10 dark:border-slate-900 mt-auto transition-colors duration-300">
+    <div class="flex flex-col md:flex-row justify-between items-center px-3 sm:px-4 md:px-8 max-w-[1440px] mx-auto w-full gap-2 sm:gap-0">
+      <div class="mb-2 md:mb-0">
+        <p class="font-inter text-[10px] sm:text-xs text-on-surface-variant/50 dark:text-slate-500">© 2026 БГЭУ. Мобильное расписание занятий.</p>
+      </div>
+      <div class="flex space-x-4 sm:space-x-8">
+        <a class="font-inter text-[10px] sm:text-xs text-on-surface-variant/50 dark:text-slate-500 hover:text-primary transition-opacity" href="https://bseu.by" target="_blank">Официальный сайт БГЭУ</a>
+        <a class="font-inter text-[10px] sm:text-xs text-on-surface-variant/50 dark:text-slate-500 hover:text-primary transition-opacity" href="#">Контакты разработчиков</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Модальное окно первого выбора группы -->
+  <div id="first-time-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-3 sm:p-4 hidden transition-opacity duration-300 opacity-0">
+    <div class="bg-white dark:bg-slate-900 border border-outline-variant/15 dark:border-slate-800 rounded-3xl p-5 sm:p-6 md:p-8 max-w-md w-full shadow-2xl transform scale-95 transition-all duration-300">
+      <div class="text-center mb-4 sm:mb-6">
+        <div class="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-primary/10 text-primary dark:text-[#b5bcff] mx-auto mb-3 sm:mb-4 flex items-center justify-center">
+          <span class="material-symbols-outlined text-2xl sm:text-3xl">school</span>
+        </div>
+        <h3 class="text-xl sm:text-2xl font-headline font-bold text-on-surface dark:text-white">Добро пожаловать!</h3>
+        <p class="text-on-surface-variant/80 dark:text-slate-400 text-xs sm:text-sm mt-1 sm:mt-2">Пожалуйста, выберите вашу учебную группу для настройки расписания.</p>
+      </div>
+      
+      <div class="space-y-3 sm:space-y-4">
+        <div>
+          <label for="modal-faculty" class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Факультет</label>
+          <select id="modal-faculty" class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 px-3 sm:px-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary">
+            <option value="-1">Выберите факультет</option>
+          </select>
+        </div>
+        <div>
+          <label for="modal-form" class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Форма обучения</label>
+          <select id="modal-form" disabled class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 px-3 sm:px-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary disabled:opacity-50">
+            <option value="-1">Не выбран факультет</option>
+          </select>
+        </div>
+        <div>
+          <label for="modal-course" class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Курс</label>
+          <select id="modal-course" disabled class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 px-3 sm:px-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary disabled:opacity-50">
+            <option value="-1">Выберите курс</option>
+          </select>
+        </div>
+        <div>
+          <label for="modal-group" class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Группа</label>
+          <select id="modal-group" disabled class="w-full bg-surface-container-low dark:bg-slate-800 border-none rounded-xl py-2.5 sm:py-3 px-3 sm:px-4 text-sm sm:text-base md:text-sm font-semibold text-on-surface dark:text-slate-200 focus:ring-2 focus:ring-primary disabled:opacity-50">
+            <option value="-1">Выберите группу</option>
+          </select>
+        </div>
+        
+        <button id="modal-save-btn" disabled class="w-full mt-4 sm:mt-6 signature-gradient text-on-primary py-3 sm:py-4 rounded-xl font-bold tracking-wide hover:opacity-90 hover:shadow-lg hover:shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base">
+          <span>Сохранить выбор</span>
+          <span class="material-symbols-outlined text-base sm:text-lg">check_circle</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно записи домашнего задания -->
+  <div id="homework-modal" class="fixed inset-0 bg-slate-900/60 z-[100] hidden items-center justify-center p-3 sm:p-4 backdrop-blur-md transition-all duration-300 opacity-0">
+    <div class="bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 dark:border-slate-800 rounded-3xl shadow-2xl w-full max-w-md p-5 sm:p-6 md:p-8 max-h-[90vh] overflow-y-auto no-scrollbar transform scale-95 transition-all duration-300">
+      <div class="flex justify-between items-center border-b border-outline-variant/10 dark:border-slate-800 pb-2 sm:pb-3 mb-3 sm:mb-4">
+        <h2 class="text-base sm:text-lg font-bold text-on-surface dark:text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-amber-600 dark:text-amber-400">assignment</span>
+          <span id="homework-modal-title">Домашнее задание</span>
+        </h2>
+        <button id="homework-modal-close" class="text-on-surface-variant/60 hover:text-on-surface dark:text-slate-400 dark:hover:text-white text-xl sm:text-2xl font-light leading-none cursor-pointer" aria-label="Закрыть">&times;</button>
+      </div>
+
+      <div id="homework-modal-subject" class="mb-3 sm:mb-4 flex items-start gap-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/50 rounded-xl px-3 py-2.5">
+        <span class="material-symbols-outlined text-base sm:text-lg text-amber-600 dark:text-amber-400 shrink-0 mt-0.5">menu_book</span>
+        <div class="min-w-0">
+          <div id="homework-modal-subject-name" class="text-sm sm:text-base font-bold text-amber-800 dark:text-amber-200 leading-snug break-words">—</div>
+          <div id="homework-modal-subject-meta" class="text-[11px] sm:text-xs text-amber-700/70 dark:text-amber-300/60 font-semibold mt-0.5"></div>
+        </div>
+      </div>
+
+      <label for="homework-text" class="block text-[10px] font-bold text-on-surface-variant/80 dark:text-slate-400 uppercase tracking-wider mb-1 sm:mb-2">Текст задания</label>
+      <div class="relative">
+        <span class="material-symbols-outlined field-icon absolute left-2.5 sm:left-3 top-3 sm:top-3.5 text-base pointer-events-none">edit_note</span>
+        <textarea id="homework-text" rows="5" placeholder="Опишите домашнее задание…" class="w-full text-sm sm:text-base md:text-sm bg-surface-container-low dark:bg-slate-800 border border-transparent rounded-xl py-2.5 sm:py-3 pl-9 sm:pl-10 pr-3 sm:pr-4 font-semibold text-on-surface dark:text-slate-200 placeholder:text-on-surface-variant/40 focus:ring-2 focus:ring-primary resize-none leading-relaxed"></textarea>
+      </div>
+
+      <div class="flex items-center gap-2 sm:gap-3 mt-4 sm:mt-6">
+        <button id="homework-delete-btn" class="hidden items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/50 border border-rose-200/60 dark:border-rose-900/50 text-xs sm:text-sm font-bold transition-all cursor-pointer">
+          <span class="material-symbols-outlined text-base">delete</span>
+          <span>Удалить</span>
+        </button>
+        <button id="homework-cancel-btn" class="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl text-on-surface-variant dark:text-slate-300 bg-surface-container-low dark:bg-slate-800 hover:bg-surface-container-high dark:hover:bg-slate-800/80 text-xs sm:text-sm font-bold transition-all cursor-pointer">Отмена</button>
+        <button id="homework-save-btn" class="flex-1 inline-flex items-center justify-center gap-1.5 signature-gradient text-on-primary px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl font-bold tracking-wide hover:opacity-90 hover:shadow-lg hover:shadow-primary/20 transition-all text-xs sm:text-sm cursor-pointer">
+          <span class="material-symbols-outlined text-base sm:text-lg">check_circle</span>
+          <span>Сохранить</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Нижняя мобильная панель навигации -->
+  <div class="mobile-bottom-nav" id="bottom-nav">
+    <div class="mobile-bottom-nav-inner">
+      <button class="mobile-bottom-nav-btn hidden" id="bottom-default-group-btn" data-tab="defaultgroup">
+        <span class="material-symbols-outlined">star</span>
+        <span class="nav-label" id="bottom-default-group-label">Группа</span>
+      </button>
+      <button class="mobile-bottom-nav-btn active" data-tab="group" onclick="switchMobileTab('group')">
+        <span class="material-symbols-outlined">groups</span>
+        <span class="nav-label">Группа</span>
+      </button>
+      <button class="mobile-bottom-nav-btn" data-tab="teacher" onclick="switchMobileTab('teacher')">
+        <span class="material-symbols-outlined">person</span>
+        <span class="nav-label">Препод.</span>
+      </button>
+      <button class="mobile-bottom-nav-btn" data-tab="room" onclick="switchMobileTab('room')">
+        <span class="material-symbols-outlined">meeting_room</span>
+        <span class="nav-label">Аудитория</span>
+      </button>
+      <button class="mobile-bottom-nav-btn income-btn" id="bottom-income-btn" onclick="toggleMobileIncome()">
+        <span class="material-symbols-outlined relative">
+          monetization_on
+          <span class="bottom-nav-dot" id="bottom-nav-dot"></span>
+        </span>
+        <span class="nav-label">Доход</span>
+      </button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
