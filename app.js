@@ -148,6 +148,324 @@ function setHomeworkForLesson(lesson, text) {
   saveHomework(hw);
 }
 
+// ===== Хранилище посещаемости (пропуски) =====
+// Статус пары: отсутствие ключа = «был на паре» (присутствие).
+// Явные значения: "valid" — уважительная причина, "invalid" — неуважительная.
+const ATTENDANCE_STORAGE_KEY = "bseu_attendance_v1";
+// Оправдательные документы: массив { id, label, start, end } (ISO-даты).
+const EXCUSE_STORAGE_KEY = "bseu_excuses_v1";
+
+function getAttendanceKey(lesson) {
+  // Стабильный ключ пары в рамках семестра основной группы.
+  const subject = (lesson.subject || "").trim();
+  const order = lesson._subjectOrderIndex || "";
+  const time = (lesson.time || "").trim();
+  const day = (lesson.day || "").trim();
+  return `${subject}::${order}::${time}::${day}`;
+}
+
+function loadAttendance() {
+  try {
+    const raw = localStorage.getItem(ATTENDANCE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveAttendance(attendance) {
+  try {
+    localStorage.setItem(ATTENDANCE_STORAGE_KEY, JSON.stringify(attendance));
+  } catch (e) {
+    console.warn("Не удалось сохранить посещаемость:", e);
+  }
+}
+
+function setAttendanceStatus(lesson, status) {
+  const attendance = loadAttendance();
+  const key = getAttendanceKey(lesson);
+  if (status === "present" || !status) {
+    delete attendance[key];
+  } else {
+    attendance[key] = status; // "valid" | "invalid"
+  }
+  saveAttendance(attendance);
+  // Любое изменение статуса сразу пересчитывает итоги панели пропусков
+  if (typeof updateAbsencePanel === "function") {
+    try { updateAbsencePanel(); } catch (e) { console.warn("updateAbsencePanel:", e); }
+  }
+  return attendance;
+}
+
+function loadExcuses() {
+  try {
+    const raw = localStorage.getItem(EXCUSE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveExcuses(excuses) {
+  try {
+    localStorage.setItem(EXCUSE_STORAGE_KEY, JSON.stringify(excuses));
+  } catch (e) {
+    console.warn("Не удалось сохранить оправдательные документы:", e);
+  }
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"')
+    .replace(/'/g, '&#039;');
+}
+
+function formatHumanDate(dateString) {
+  if (!dateString) return '';
+  const d = new Date(dateString);
+  if (Number.isNaN(d.getTime())) return dateString;
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+// Правильное русское окончание для слова «пара»:
+// 1 пара, 2–4 пары, 5–20 пар, 11–14 пар, 21 пара, 22–24 пары...
+function pluralLessons(n) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  let word;
+  if (mod10 === 1 && mod100 !== 11) word = 'пара';
+  else if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) word = 'пары';
+  else word = 'пар';
+  return `${n} ${word}`;
+}
+
+function parseWeeks(weeksStr) {
+  if (!weeksStr) return [];
+  const clean = weeksStr.replace(/[()]/g, '').trim();
+  if (!clean) return [];
+  const parts = clean.split(',');
+  const result = [];
+  parts.forEach(part => {
+    if (part.includes('-')) {
+      const [start, end] = part.split('-').map(Number);
+      for (let i = start; i <= end; i++) {
+        result.push(i);
+      }
+    } else {
+      const num = Number(part);
+      if (!Number.isNaN(num)) {
+        result.push(num);
+      }
+    }
+  });
+  return result;
+}
+
+function getMonday(d) {
+  const date = new Date(d);
+  const day = date.getDay();
+  const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+  return new Date(date.setDate(diff));
+}
+
+// Преобразует день недели (строка рус.) и номер недели в конкретную дату ISO
+function getDateForLesson(dayName, weekNum) {
+  if (!window.semesterStartDate) return null;
+  const daysOfWeekMap = {
+    'понедельник': 0, 'вторник': 1, 'среда': 2, 'четверг': 3,
+    'пятница': 4, 'суббота': 5, 'воскресенье': 6
+  };
+  const dayIndex = daysOfWeekMap[dayName.toLowerCase().trim()];
+  if (dayIndex === undefined) return null;
+  
+  const semesterMonday = getMonday(window.semesterStartDate);
+  semesterMonday.setHours(0, 0, 0, 0);
+  const resultDate = new Date(semesterMonday);
+  resultDate.setDate(semesterMonday.getDate() + (weekNum - 1) * 7 + dayIndex);
+  
+  const year = resultDate.getFullYear();
+  const month = String(resultDate.getMonth() + 1).padStart(2, '0');
+  const day = String(resultDate.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function calculateHours(start, end) {
+  const [sH, sM] = start.split(':').map(Number);
+  const [eH, eM] = end.split(':').map(Number);
+  let diff = (eH * 60 + eM) - (sH * 60 + sM);
+  return (diff < 0 ? diff + 1440 : diff) / 60;
+}
+
+// Возвращает статус пары с учётом оправдательных документов.
+// Приоритет: явный статус (invalid/valid) > авто-уважительно по документу > присутствие.
+function getAttendanceStatus(lesson) {
+  try {
+    const attendance = loadAttendance();
+    const explicit = attendance[getAttendanceKey(lesson)];
+    if (explicit === "invalid") return "invalid";
+    if (explicit === "valid") return "valid";
+    // Автоматическая уважительная причина по периоду оправдательного документа
+    const dates = getLessonDates(lesson);
+    if (dates.length) {
+      const excuses = loadExcuses();
+      for (const d of dates) {
+        if (excuses.some(ex => d >= ex.start && d <= ex.end)) return "valid";
+      }
+    }
+  } catch (e) {
+    console.warn("getAttendanceStatus:", e);
+  }
+  return "present";
+}
+
+// Реальные календарные даты пары, вычисленные от старта семестра.
+// Для пар без привязки к неделям (weeks === "") возвращает [] (разовые,
+// не привязанные к семестру — не попадают под оправдательные документы по датам).
+function getLessonDates(lesson) {
+  try {
+    const weeks = parseWeeks(lesson.weeks);
+    if (!weeks.length) return [];
+    const result = [];
+    weeks.forEach(w => {
+      const iso = getDateForLesson((lesson.day || "").toLowerCase().trim(), w);
+      if (iso) result.push(iso);
+    });
+    return result;
+  } catch (e) {
+    return [];
+  }
+}
+
+// Итоги пропусков за семестр для текущего расписания группы.
+function computeAbsenceTotals() {
+  const lessons = window.cachedLessons || [];
+  let validHours = 0, validPairs = 0, invalidHours = 0, invalidPairs = 0;
+  lessons.forEach(l => {
+    const status = getAttendanceStatus(l);
+    if (status === "present") return;
+    // Каждая пара — отдельное занятие. 1 пара = 2 часа.
+    validPairs += status === "valid" ? 1 : 0;
+    invalidPairs += status === "invalid" ? 1 : 0;
+    validHours += status === "valid" ? 2 : 0;
+    invalidHours += status === "invalid" ? 2 : 0;
+  });
+  return { validHours, validPairs, invalidHours, invalidPairs };
+}
+
+// Активен ли режим «По группе» (вкладка группы выбрана). Именно в этом
+// режиме показываем учёт пропусков — в режимах преподавателя/аудитории нет.
+// Работает как для сохранённой основной группы, так и для обычного выбора группы.
+function isGroupModeActive() {
+  const tab = document.getElementById("tab-group");
+  return !!tab && tab.classList.contains("segment-btn-active");
+}
+
+// Обновляет панель учёта пропусков: итоги, список документов, предупреждение.
+function updateAbsencePanel() {
+  try {
+    const panel = document.getElementById("absence-panel");
+    if (!panel) return;
+    const totals = computeAbsenceTotals();
+  const validEl = document.getElementById("absence-valid");
+  const invalidEl = document.getElementById("absence-invalid");
+  if (validEl) validEl.textContent = `${formatHours(totals.validHours)} (${pluralLessons(totals.validPairs)})`;
+  if (invalidEl) invalidEl.textContent = `${formatHours(totals.invalidHours)} (${pluralLessons(totals.invalidPairs)})`;
+
+  // Предупреждение, если даты семестра не определены
+  const semWarning = document.getElementById("absence-semester-warning");
+  if (semWarning) {
+    const semStartStr = localStorage.getItem("bseu_semester_start_date");
+    if (semStartStr) semWarning.classList.add("hidden");
+    else semWarning.classList.remove("hidden");
+  }
+
+  // Список оправдательных документов
+  const list = document.getElementById("absence-excuses-list");
+  if (list) {
+    const excuses = loadExcuses();
+    if (!excuses.length) {
+      list.innerHTML = '<p class="text-[11px] text-on-surface-variant/50 dark:text-slate-500 text-center py-1">Документов нет.</p>';
+    } else {
+      list.innerHTML = excuses.map(ex => {
+        const dates = `${formatHumanDate(ex.start)} — ${formatHumanDate(ex.end)}`;
+        return `
+          <div class="flex items-center justify-between gap-2 text-[11px] sm:text-xs border border-outline-variant/15 dark:border-slate-800 rounded-lg bg-surface-container-low dark:bg-slate-800/60 px-2.5 py-1.5">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="material-symbols-outlined text-base text-sky-600 dark:text-sky-400 shrink-0">medical_services</span>
+              <div class="min-w-0">
+                <div class="font-semibold text-on-surface dark:text-slate-200 truncate">${escapeHtml(ex.label || "Документ")}</div>
+                <div class="text-on-surface-variant/60 dark:text-slate-400 text-[10px]">${dates}</div>
+              </div>
+            </div>
+            <button type="button" data-excuse="${ex.id}" class="absence-excuse-del shrink-0 text-on-surface-variant/40 hover:text-rose-500 dark:text-slate-500 dark:hover:text-rose-400 text-base font-light leading-none px-1 cursor-pointer" title="Удалить">&times;</button>
+          </div>`;
+      }).join('');
+      list.querySelectorAll('.absence-excuse-del').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.excuse;
+          const remaining = loadExcuses().filter(e => e.id !== id);
+          saveExcuses(remaining);
+          updateAbsencePanel();
+          syncAllAttendanceToggles();
+        });
+      });
+    }
+  }
+  } catch (e) {
+    console.warn("updateAbsencePanel:", e);
+  }
+}
+
+// Синхронизирует состояние всех видимых переключателей на карточках
+function syncAllAttendanceToggles() {
+  try {
+    const container = document.getElementById("schedule-container");
+    if (!container) return;
+    container.querySelectorAll('.lesson-card').forEach(card => {
+      const toggle = card.querySelector('.att-toggle');
+      if (toggle && card._lesson) syncAttendanceToggle(toggle, card._lesson);
+    });
+  } catch (e) {
+    console.warn("syncAllAttendanceToggles:", e);
+  }
+}
+
+// Форматирует часы: дробные округляем до 1 знака, целые — без дроби
+function formatHours(h) {
+  const rounded = Math.round(h * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)} ч`;
+}
+
+// Показать/скрыть панель пропусков.
+// Получаем элемент панели через getElementById (а не через переменную
+// из области видимости DOMContentLoaded), т.к. эта функция определена
+// на верхнем уровне модуля и иначе не видит локальную const absencePanel.
+function toggleAbsencePanel() {
+  const panel = document.getElementById("absence-panel");
+  if (!panel) return;
+  if (panel.classList.contains("hidden")) {
+    panel.classList.remove("hidden");
+    updateAbsencePanel();
+  } else {
+    panel.classList.add("hidden");
+  }
+}
+
+// Добавление оправдательного документа
+function addExcuse(label, start, end) {
+  const excuses = loadExcuses();
+  if (new Date(end) < new Date(start)) {
+    const tmp = start; start = end; end = tmp;
+  }
+  excuses.push({ id: Date.now().toString(), label: label || "Документ", start, end });
+  saveExcuses(excuses);
+  updateAbsencePanel();
+  syncAllAttendanceToggles();
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   // Селекторы UI
   const facultySelect = document.getElementById("faculty");
@@ -184,6 +502,8 @@ document.addEventListener("DOMContentLoaded", () => {
    const dayStripContainer = document.getElementById("day-strip-container");
    const scheduleToolbar = document.getElementById("schedule-toolbar");
    const examsToggle = document.getElementById("exams-toggle");
+   const absenceToggle = document.getElementById("absence-toggle");
+   const absencePanel = document.getElementById("absence-panel");
    const weekLabel = document.getElementById("week-label");
    const weekPrev = document.getElementById("week-prev");
    const weekNext = document.getElementById("week-next");
@@ -327,6 +647,8 @@ document.addEventListener("DOMContentLoaded", () => {
     closeRoomDropdown();
     updatePrimaryGroupButtonVisibility();
     showWidget();
+    // Синхронизируем переключатели пропусков с режимом (показать/скрыть)
+    refreshAttendanceToggles();
   }
 
   // Логика тёмной темы
@@ -576,13 +898,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return tz.toISOString().slice(0, 10);
   }
 
-  function formatHumanDate(dateString) {
-    if (!dateString) return '';
-    const d = new Date(dateString);
-    if (Number.isNaN(d.getTime())) return dateString;
-    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-  }
-
   function fmtTime(iso) {
     if (!iso) return '—';
     const raw = String(iso).trim();
@@ -627,15 +942,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return '—';
   }
 
-  function escapeHtml(text) {
-    return String(text)
-      .replace(/&/g, '&')
-      .replace(/</g, '<')
-      .replace(/>/g, '>')
-      .replace(/"/g, '"')
-      .replace(/'/g, '&#039;');
-  }
-
   // Извлекает сокращённое название факультета из текста в скобках, напр. "(УЭФ)" → "УЭФ"
   function shortenFacultyName(full) {
     if (!full) return '';
@@ -671,18 +977,6 @@ document.addEventListener("DOMContentLoaded", () => {
         return c ? c.charAt(0).toUpperCase() : '';
       })
       .join('');
-  }
-
-  // Правильное русское окончание для слова «пара»:
-  // 1 пара, 2–4 пары, 5–20 пар, 11–14 пар, 21 пара, 22–24 пары...
-  function pluralLessons(n) {
-    const mod10 = n % 10;
-    const mod100 = n % 100;
-    let word;
-    if (mod10 === 1 && mod100 !== 11) word = 'пара';
-    else if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) word = 'пары';
-    else word = 'пар';
-    return `${n} ${word}`;
   }
 
   function createSelectOption(value, text, shortener) {
@@ -1496,12 +1790,110 @@ document.addEventListener("DOMContentLoaded", () => {
     };
   }
 
+  // Возвращает насыщенный цвет типа пары в виде HEX (соответствует
+  // цвету левого индикатора в карточке занятия режима группы по умолчанию).
+  function getLessonColorHex(type) {
+    if (!type) return '#94a3b8';
+    const t = type.toLowerCase();
+    if (t.includes("л")) return '#7c3aed';
+    if (t.includes("п") || t.includes("с")) return '#059669';
+    if (t.includes("лаб") || t.includes("л.р") || t.includes("комп")) return '#d97706';
+    if (t.includes("к") || t.includes("конс")) return '#2563eb';
+    if (t.includes("э") || t.includes("экз")) return '#e11d48';
+    return '#94a3b8';
+  }
+
+  // Создаёт маленький переключатель статуса посещаемости пары (3 состояния):
+  // 1 — был на паре (по умолчанию), 2 — уважительная причина, 3 — неуважительная.
+  function buildAttendanceToggle(l) {
+    const wrap = document.createElement("div");
+    wrap.className = "att-toggle absolute top-3 right-3 z-10 flex items-center rounded-full border border-outline-variant/20 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 overflow-hidden select-none";
+    wrap.title = "Статус посещаемости: был / уважительно / неуважительно";
+
+    try {
+    const states = [
+      { value: "present", icon: "check_circle", cls: "text-on-surface-variant/50 dark:text-slate-500", title: "Был на паре" },
+      { value: "valid", icon: "event_available", cls: "text-sky-600 dark:text-sky-400", title: "Уважительная причина" },
+      { value: "invalid", icon: "cancel", cls: "text-error dark:text-error-container", title: "Неуважительная причина" }
+    ];
+
+    const status = getAttendanceStatus(l);
+
+    states.forEach(s => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.attState = s.value;
+      btn.title = s.title;
+      btn.className = `att-state-btn flex items-center justify-center w-8 h-8 transition-colors cursor-pointer ${s.value === status ? s.cls + " bg-surface-container-high dark:bg-slate-700" : "text-on-surface-variant/40 dark:text-slate-600 hover:bg-surface-container-high/60 dark:hover:bg-slate-700/50"}`;
+      btn.innerHTML = `<span class="material-symbols-outlined text-[18px] leading-none">${s.icon}</span>`;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const targetValue = s.value;
+        setAttendanceStatus(l, targetValue === "present" ? "present" : targetValue);
+        syncAttendanceToggle(wrap, l);
+        updateAbsencePanel();
+      });
+      wrap.appendChild(btn);
+    });
+    } catch (e) {
+      console.warn("buildAttendanceToggle:", e);
+    }
+
+    return wrap;
+  }
+
+  // Синхронизирует визуальное состояние переключателя с текущим статусом пары
+  function syncAttendanceToggle(wrap, l) {
+    const status = getAttendanceStatus(l);
+    const map = {
+      present: { icon: "check_circle", cls: "text-on-surface-variant/50 dark:text-slate-500" },
+      valid: { icon: "event_available", cls: "text-sky-600 dark:text-sky-400" },
+      invalid: { icon: "cancel", cls: "text-error dark:text-error-container" }
+    };
+    wrap.querySelectorAll(".att-state-btn").forEach(btn => {
+      const st = btn.dataset.attState;
+      const iconEl = btn.querySelector(".material-symbols-outlined");
+      const active = st === status;
+      const target = map[st];
+      btn.className = `att-state-btn flex items-center justify-center w-8 h-8 transition-colors cursor-pointer ${active ? target.cls + " bg-surface-container-high dark:bg-slate-700" : "text-on-surface-variant/40 dark:text-slate-600 hover:bg-surface-container-high/60 dark:hover:bg-slate-700/50"}`;
+      iconEl.textContent = target.icon;
+    });
+  }
+
+  // Добавляет переключатели посещаемости ко всем карточкам пар в контейнере
+  // расписания, у которых их ещё нет (идемпотентно). Используется для
+  // представлений, строящих карточки вручную (По дням). Также убирает
+  // «висячие» переключатели, если больше не активен режим основной группы.
+  function refreshAttendanceToggles() {
+    try {
+      if (!isGroupModeActive() || !isDefaultGroupActive) {
+        scheduleContainer.querySelectorAll('.lesson-card .att-toggle').forEach(t => t.remove());
+        return;
+      }
+      scheduleContainer.querySelectorAll('.lesson-card').forEach(card => {
+        // Без :scope — он не поддерживается в ряде WebView и бросает ошибку.
+        if (card.querySelector('.att-toggle')) return;
+        const l = card._lesson;
+        if (!l) return;
+        const toggle = buildAttendanceToggle(l);
+        toggle.classList.add('att-toggle');
+        card.appendChild(toggle);
+      });
+      // Синхронизируем итоги панели пропусков с актуальными статусами
+      updateAbsencePanel();
+    } catch (e) {
+      console.warn("refreshAttendanceToggles:", e);
+    }
+  }
+
   // Создаёт DOM-карточку занятия (общий виджет для дневного и семестрового режимов)
   function buildLessonCard(l, showWeeks) {
     const styles = getLessonStyles(l.type);
     const card = document.createElement("div");
     card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card";
     card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
+    card._lesson = l;
+    card.dataset.attKey = getAttendanceKey(l);
 
     const timeParts = l.time.split("-");
     const startTime = timeParts[0] ? timeParts[0].trim() : l.time;
@@ -1555,6 +1947,12 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
       </div>
     `;
+
+    // Переключатель статуса посещаемости — строго для основной группы по умолчанию
+    if (isGroupModeActive() && isDefaultGroupActive) {
+      const toggle = buildAttendanceToggle(l);
+      card.appendChild(toggle);
+    }
 
     // Обработчики кнопок ДЗ
     const addBtn = card.querySelector('.hw-add-btn');
@@ -1774,11 +2172,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const headers = Array.from(table.querySelectorAll("thead th")).map(th => th.textContent.trim().toLowerCase());
     const isTeacherSchedule = headers.includes("группа");
 
-    rows.forEach(row => {
+    const rowArr = Array.from(rows);
+    for (let i = 0; i < rowArr.length; i++) {
+      const row = rowArr[i];
       const wdayCell = row.querySelector("td.wday");
       if (wdayCell) {
         currentDay = wdayCell.textContent.trim();
-        return;
+        continue;
       }
 
       const cells = row.querySelectorAll("td");
@@ -1853,15 +2253,35 @@ document.addEventListener("DOMContentLoaded", () => {
             if (teachEl) teachEl.remove();
             subject = clone.textContent.replace(/,\s*$/, "").trim();
           }
-          const finalRightCell = rightCell || cells[cells.length - 1];
-          if (finalRightCell) room = finalRightCell.textContent.trim();
+
+          // Аудитория: если в строке-заголовке есть явная ячейка .right/.rght —
+          // берём её. Иначе (например, «Иностранный язык» с подгруппами) аудитории
+          // лежат в дочерних строках подгрупп — собираем их оттуда.
+          if (rightCell) {
+            room = rightCell.textContent.trim();
+          } else if (subject) {
+            const subgroupRooms = [];
+            for (let j = i + 1; j < rowArr.length; j++) {
+              const subRow = rowArr[j];
+              if (subRow.querySelector("td.wday")) break;
+              // Строка новой пары (со своим временем) — выходим из блока подгрупп
+              const subCells = subRow.querySelectorAll("td");
+              if (subCells.length >= 3 && !subRow.querySelector("td.sg")) break;
+              const lastCell = subCells[subCells.length - 1];
+              if (lastCell) {
+                const r = lastCell.textContent.replace(/<!--[\s\S]*?-->/g, "").trim();
+                if (r && !subgroupRooms.includes(r)) subgroupRooms.push(r);
+              }
+            }
+            room = subgroupRooms.join(", ");
+          }
 
           if (subject && time) {
             lessons.push({ day: currentDay || "Вне сетки", time, weeks, subject, type, teacher, room, isTeacher: false });
           }
         }
       }
-    });
+    }
 
     // Присваиваем каждой паре порядковый номер в рамках её предмета во всём семестре,
     // отсортировав по дню недели + времени.
@@ -1920,13 +2340,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const targetDate = window.selectedDateISO || todayISO();
     if (currentDisplayMode === "semester") {
       renderSemesterView(shouldScroll);
-      return;
     } else if (currentDisplayMode === "exams") {
       renderExamView(shouldScroll);
-      return;
+    } else {
+      renderDayStrip(targetDate);
+      selectDayOnStrip(targetDate);
     }
-    renderDayStrip(targetDate);
-    selectDayOnStrip(targetDate);
     if (shouldScroll) scrollToSchedule();
   }
 
@@ -1957,6 +2376,8 @@ document.addEventListener("DOMContentLoaded", () => {
         
         card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card";
         card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
+        card._lesson = l;
+        card.dataset.attKey = getAttendanceKey(l);
 
         // Разделяем время пары
         const timeParts = l.time.split("-");
@@ -1995,6 +2416,9 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
           </div>
         `;
+        if (isGroupModeActive() && isDefaultGroupActive) {
+          card.appendChild(buildAttendanceToggle(l));
+        }
         cardsContainer.appendChild(card);
       });
       
@@ -2086,35 +2510,6 @@ document.addEventListener("DOMContentLoaded", () => {
     weekLabel.textContent = `Неделя ${weekNum}`;
   }
   
-  function getMonday(d) {
-    const date = new Date(d);
-    const day = date.getDay();
-    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-    return new Date(date.setDate(diff));
-  }
-
-  function parseWeeks(weeksStr) {
-    if (!weeksStr) return [];
-    const clean = weeksStr.replace(/[()]/g, '').trim();
-    if (!clean) return [];
-    const parts = clean.split(',');
-    const result = [];
-    parts.forEach(part => {
-      if (part.includes('-')) {
-        const [start, end] = part.split('-').map(Number);
-        for (let i = start; i <= end; i++) {
-          result.push(i);
-        }
-      } else {
-        const num = Number(part);
-        if (!Number.isNaN(num)) {
-          result.push(num);
-        }
-      }
-    });
-    return result;
-  }
-  
   function renderDayStrip(selectedDateISO) {
     dayStripRow.innerHTML = '';
     const startDate = getStartOfWeek(currentWeekOffset);
@@ -2184,8 +2579,8 @@ document.addEventListener("DOMContentLoaded", () => {
       
       if (isDefaultGroupActive && incomeShifts.some(s => s.date === iso)) {
         const workDot = document.createElement('span');
-        workDot.className = 'absolute top-1 right-1 text-[11px] leading-none pointer-events-none';
-        workDot.textContent = '💼';
+        workDot.className = 'material-symbols-outlined absolute top-1 right-1 text-[13px] leading-none pointer-events-none text-emerald-500 dark:text-emerald-400';
+        workDot.textContent = 'work';
         btn.appendChild(workDot);
       }
 
@@ -2261,7 +2656,7 @@ document.addEventListener("DOMContentLoaded", () => {
         scheduleContainer.innerHTML = `
           <div class="no-schedule bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/10 dark:border-slate-800 rounded-2xl p-12 text-center text-on-surface-variant/60 font-semibold flex flex-col items-center gap-3">
             <span class="material-symbols-outlined text-4xl text-slate-400">event_busy</span>
-            <span>Занятий не найдено. Свободный день!</span>
+            <span>Занятий не найдено</span>
           </div>`;
         return;
       }
@@ -2349,14 +2744,254 @@ document.addEventListener("DOMContentLoaded", () => {
       modeSemesterBtn.classList.remove("hidden");
     }
     
-    // Кнопка "Экзамены" рядом с неделями — только в режиме группы по умолчанию
-    // (загружена основная группа, а не просто вкладка "По группе")
-    const isDefaultGroup = isGroupTab && isDefaultGroupActive;
-    if (isDefaultGroup) {
+    // Кнопки "Экзамены" и "Пропуски" рядом с неделями — только в режиме
+    // «По группе», а учёт пропусков — строго для основной группы по умолчанию.
+    if (isGroupTab) {
       examsToggle.classList.remove("hidden");
+      if (isDefaultGroupActive) {
+        absenceToggle.classList.remove("hidden");
+      } else {
+        absenceToggle.classList.add("hidden");
+        // Скрываем панель пропусков при выходе из режима основной группы
+        if (absencePanel) absencePanel.classList.add("hidden");
+      }
     } else {
       examsToggle.classList.add("hidden");
+      absenceToggle.classList.add("hidden");
+      // Скрываем панель пропусков при выходе из режима основной группы
+      if (absencePanel) absencePanel.classList.add("hidden");
     }
+  }
+
+  // ===== Обработчики панели учёта пропусков =====
+  // Кнопка видна только для основной группы по умолчанию (см. updateModeButtons),
+  // поэтому дополнительных проверок режима здесь не требуется.
+  if (absenceToggle) {
+    absenceToggle.addEventListener("click", () => {
+      toggleAbsencePanel();
+    });
+  }
+  const absencePanelClose = document.getElementById("absence-panel-close");
+  if (absencePanelClose) {
+    absencePanelClose.addEventListener("click", () => {
+      if (absencePanel) absencePanel.classList.add("hidden");
+    });
+  }
+  const absenceExcuseForm = document.getElementById("absence-excuse-form");
+  if (absenceExcuseForm) {
+    // Логика всплывающего календаря для выбора дат оправдательного документа
+    let _absenceCalTarget = null; // "start" | "end"
+    let _absenceCalDate = new Date();
+    const absenceCalGrid = document.getElementById("absence-cal-grid");
+    const absenceCalMonth = document.getElementById("absence-cal-month");
+    const absenceCalPrev = document.getElementById("absence-cal-prev");
+    const absenceCalNext = document.getElementById("absence-cal-next");
+    const absenceStartTrigger = document.getElementById("absence-start-trigger");
+    const absenceEndTrigger = document.getElementById("absence-end-trigger");
+    const absenceStartDisplay = document.getElementById("absence-start-display");
+    const absenceEndDisplay = document.getElementById("absence-end-display");
+    const absenceExcuseStart = document.getElementById("absence-excuse-start");
+    const absenceExcuseEnd = document.getElementById("absence-excuse-end");
+    const absenceCalendar = document.getElementById("absence-calendar");
+
+    // Переносим попап календаря в <body>, чтобы на него не влиял transform
+    // у карточки панели (animate-slide-down) и он не оказывался запертым
+    // в стековом контексте родителя, оставаясь под лентой дней / контентом.
+    if (absenceCalendar && absenceCalendar.parentElement !== document.body) {
+      document.body.appendChild(absenceCalendar);
+    }
+
+    // Границы семестра (если заданы) — вне них оправдательные документы
+    // по периоду не работают, поэтому даты за пределами делаем неактивными.
+    function getSemesterBounds() {
+      const semStartStr = localStorage.getItem("bseu_semester_start_date");
+      if (!semStartStr) return null;
+      const start = new Date(semStartStr);
+      start.setHours(0, 0, 0, 0);
+      // Семестр ~ 17 недель (примерно 4 месяца) от старта.
+      const end = new Date(start);
+      end.setMonth(end.getMonth() + 4);
+      end.setDate(end.getDate() + 20);
+      return { start, end };
+    }
+
+    function renderAbsenceCalendar() {
+      if (!absenceCalGrid || !absenceCalMonth) return;
+      const year = _absenceCalDate.getFullYear();
+      const month = _absenceCalDate.getMonth();
+      const firstDay = new Date(year, month, 1);
+      const startDow = (firstDay.getDay() + 6) % 7;
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const monthName = firstDay.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+      absenceCalMonth.textContent = monthName;
+
+      const bounds = getSemesterBounds();
+      const sStart = absenceExcuseStart.value;
+      const sEnd = absenceExcuseEnd.value;
+      const rangeStart = sStart && sEnd ? (sStart <= sEnd ? sStart : sEnd) : null;
+      const rangeEnd = sStart && sEnd ? (sStart <= sEnd ? sEnd : sStart) : null;
+
+      // Сводка выбранного периода
+      const rangeInfo = document.getElementById("absence-cal-range");
+      const rangeText = document.getElementById("absence-cal-range-text");
+      if (rangeInfo && rangeText) {
+        if (rangeStart && rangeEnd) {
+          const days = Math.round((new Date(rangeEnd) - new Date(rangeStart)) / 86400000) + 1;
+          rangeText.textContent = `${formatHumanDate(rangeStart)} — ${formatHumanDate(rangeEnd)} · ${days} ${days === 1 ? 'день' : 'дней'}`;
+          rangeInfo.classList.remove("hidden");
+        } else if (rangeStart) {
+          rangeText.textContent = `${formatHumanDate(rangeStart)} — …`;
+          rangeInfo.classList.remove("hidden");
+        } else {
+          rangeInfo.classList.add("hidden");
+        }
+      }
+
+      let html = '';
+      // Заглушки для выравнивания первого дня недели (воскресенье убрано,
+      // т.к. заголовки дней недели теперь в самом HTML).
+      for (let i = 0; i < startDow; i++) html += '<div class="h-8"></div>';
+      for (let day = 1; day <= daysInMonth; day++) {
+        const iso = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+        const dateObj = new Date(year, month, day);
+        const isToday = iso === todayISO();
+        const isStart = iso === sStart;
+        const isEnd = iso === sEnd;
+        const inRange = rangeStart && rangeEnd && iso > rangeStart && iso < rangeEnd;
+        const disabled = bounds && (dateObj < bounds.start || dateObj > bounds.end);
+
+        let cellCls, capCls = '';
+        if (disabled) {
+          cellCls = 'text-on-surface-variant/25 dark:text-slate-600';
+          capCls = 'rounded-full';
+        } else if (isStart && isEnd) {
+          cellCls = 'bg-primary text-white font-bold';
+          capCls = 'rounded-full';
+        } else if (isStart) {
+          cellCls = 'bg-primary text-white font-bold';
+          capCls = 'rounded-l-full';
+        } else if (isEnd) {
+          cellCls = 'bg-primary text-white font-bold';
+          capCls = 'rounded-r-full';
+        } else if (inRange) {
+          cellCls = 'bg-primary/15 dark:bg-[#b5bcff]/15 text-primary dark:text-[#b5bcff] font-semibold';
+          capCls = '!rounded-none';
+        } else if (isToday) {
+          cellCls = 'text-primary dark:text-[#b5bcff] font-bold hover:bg-primary/10 dark:hover:bg-slate-700';
+          capCls = 'rounded-full';
+        } else {
+          cellCls = 'text-slate-700 dark:text-slate-200 hover:bg-primary/10 dark:hover:bg-slate-700';
+          capCls = 'rounded-full';
+        }
+
+        const attr = disabled ? 'disabled' : '';
+        const opacity = disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer';
+        html += `<button type="button" data-date="${iso}" ${attr} class="h-8 w-full flex items-center justify-center text-xs font-semibold ${cellCls} ${capCls} transition-colors ${opacity}" ${disabled ? 'aria-disabled="true"' : ''}>${day}</button>`;
+      }
+      absenceCalGrid.innerHTML = html;
+      absenceCalGrid.querySelectorAll('[data-date]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.disabled) return;
+          const val = btn.dataset.date;
+          if (_absenceCalTarget === "start") {
+            absenceExcuseStart.value = val;
+            absenceStartDisplay.textContent = formatHumanDate(val);
+          } else if (_absenceCalTarget === "end") {
+            absenceExcuseEnd.value = val;
+            absenceEndDisplay.textContent = formatHumanDate(val);
+          }
+          absenceCalendar.classList.add('hidden');
+        });
+      });
+    }
+
+    function openAbsenceCalendar(target) {
+      _absenceCalTarget = target;
+      const currentVal = target === "start" ? absenceExcuseStart.value : absenceExcuseEnd.value;
+      if (currentVal) {
+        _absenceCalDate = new Date(currentVal);
+      } else {
+        _absenceCalDate = new Date();
+      }
+      renderAbsenceCalendar();
+      // Позиционируем попап (fixed — поверх всего сайта).
+      // На смартфонах делаем его почти во всю ширину и центрируем по экрану,
+      // чтобы он не выходил за края и оставался удобным для касаний.
+      const trigger = target === "start" ? absenceStartTrigger : absenceEndTrigger;
+      absenceCalendar.classList.remove('hidden');
+      const isMobile = window.innerWidth < 480;
+      if (trigger && !isMobile) {
+        const r = trigger.getBoundingClientRect();
+        const calH = absenceCalendar.offsetHeight || 320;
+        let top = r.bottom + 8;
+        if (top + calH > window.innerHeight - 8) {
+          top = Math.max(8, r.top - calH - 8);
+        }
+        absenceCalendar.style.top = `${top}px`;
+        let left = r.left + r.width / 2;
+        const calW = absenceCalendar.offsetWidth || 340;
+        left = Math.min(Math.max(8, left), window.innerWidth - calW - 8);
+        absenceCalendar.style.left = `${left}px`;
+        absenceCalendar.style.transform = 'translateX(-50%)';
+      } else {
+        // Смартфон: центрируем по горизонтали и ставим ниже верхней шапки
+        absenceCalendar.style.left = '50%';
+        absenceCalendar.style.transform = 'translateX(-50%)';
+        const calH = absenceCalendar.offsetHeight || 360;
+        const safeTop = (window.scrollY || 0) + 72; // под sticky-шапкой
+        let top = safeTop;
+        if (top + calH > (window.scrollY || 0) + window.innerHeight - 8) {
+          top = Math.max(safeTop, (window.scrollY || 0) + window.innerHeight - calH - 8);
+        }
+        absenceCalendar.style.top = `${top}px`;
+      }
+    }
+
+    if (absenceStartTrigger) {
+      absenceStartTrigger.addEventListener('click', () => openAbsenceCalendar('start'));
+    }
+    if (absenceEndTrigger) {
+      absenceEndTrigger.addEventListener('click', () => openAbsenceCalendar('end'));
+    }
+    if (absenceCalPrev) {
+      absenceCalPrev.addEventListener('click', () => {
+        _absenceCalDate.setMonth(_absenceCalDate.getMonth() - 1);
+        renderAbsenceCalendar();
+      });
+    }
+    if (absenceCalNext) {
+      absenceCalNext.addEventListener('click', () => {
+        _absenceCalDate.setMonth(_absenceCalDate.getMonth() + 1);
+        renderAbsenceCalendar();
+      });
+    }
+    // Закрытие календаря при клике вне его
+    document.addEventListener('click', (e) => {
+      if (absenceCalendar && !absenceCalendar.classList.contains('hidden') &&
+          !absenceCalendar.contains(e.target) &&
+          !e.target.closest('#absence-start-trigger') &&
+          !e.target.closest('#absence-end-trigger')) {
+        absenceCalendar.classList.add('hidden');
+      }
+    });
+    // Закрытие по Escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && absenceCalendar && !absenceCalendar.classList.contains('hidden')) {
+        absenceCalendar.classList.add('hidden');
+      }
+    });
+
+    absenceExcuseForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const label = document.getElementById("absence-excuse-label").value.trim();
+      const start = absenceExcuseStart.value;
+      const end = absenceExcuseEnd.value;
+      if (!start || !end) return;
+      addExcuse(label, start, end);
+      absenceExcuseForm.reset();
+      absenceStartDisplay.textContent = "Выберите дату";
+      absenceEndDisplay.textContent = "Выберите дату";
+    });
   }
   
   // Включает/выключает кнопки недель (в режиме экзаменов они неактивны)
@@ -2409,27 +3044,6 @@ document.addEventListener("DOMContentLoaded", () => {
     // Точное совпадение по одному символу или по полному названию
     return t === 'э' || t === 'з' || t === 'к' || 
            t.includes('экз') || t.includes('зач') || t.includes('конс');
-  }
-
-  // Преобразует день недели (строка рус.) и номер недели в конкретную дату ISO
-  function getDateForLesson(dayName, weekNum) {
-    if (!window.semesterStartDate) return null;
-    const daysOfWeekMap = {
-      'понедельник': 0, 'вторник': 1, 'среда': 2, 'четверг': 3,
-      'пятница': 4, 'суббота': 5, 'воскресенье': 6
-    };
-    const dayIndex = daysOfWeekMap[dayName.toLowerCase().trim()];
-    if (dayIndex === undefined) return null;
-    
-    const semesterMonday = getMonday(window.semesterStartDate);
-    semesterMonday.setHours(0, 0, 0, 0);
-    const resultDate = new Date(semesterMonday);
-    resultDate.setDate(semesterMonday.getDate() + (weekNum - 1) * 7 + dayIndex);
-    
-    const year = resultDate.getFullYear();
-    const month = String(resultDate.getMonth() + 1).padStart(2, '0');
-    const day = String(resultDate.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
   }
 
   // Рендеринг представления экзаменов/зачётов/консультаций, сгруппированных по датам
@@ -2526,7 +3140,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const card = document.createElement("div");
         card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-rose-200/30 dark:border-rose-900/30 shadow-sm relative overflow-hidden group lesson-card";
         card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
-        
+        card._lesson = l;
+        card.dataset.attKey = getAttendanceKey(l);
+
         const timeParts = l.time.split("-");
         const startTime = timeParts[0] ? timeParts[0].trim() : l.time;
         const endTime = timeParts[1] ? timeParts[1].trim() : "";
@@ -2554,11 +3170,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2">
                   <span class="material-symbols-outlined text-base text-slate-400">${l.isTeacher ? 'groups' : 'person'}</span>
                   <span>${l.teacher || '—'}</span>
-                </p>
-              </div>
-            </div>
-          </div>
-        `;
+                 </p>
+               </div>
+             </div>
+           </div>
+         `;
+        if (isGroupModeActive()) {
+          card.appendChild(buildAttendanceToggle(l));
+        }
         cardsContainer.appendChild(card);
       });
       
@@ -2732,6 +3351,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     await getSchedule(false, { silent: !!opts.silent });
     updatePrimaryGroupButtonVisibility();
+    updateModeButtons();
+    refreshAttendanceToggles();
 
     // Активируем кнопку основной группы в нижней навигации
     document.querySelectorAll('.mobile-bottom-nav-btn').forEach(btn => {
@@ -2847,6 +3468,8 @@ document.addEventListener("DOMContentLoaded", () => {
       scheduleTitle.textContent = getGroupTitleText();
       scheduleHeaderRow.classList.remove("hidden");
       renderCurrentMode(false);
+      updateModeButtons();
+      refreshAttendanceToggles();
       // Синхронизируем панель недели (setActiveTab переключал ей
       // по устаревшим данным из другого режима).
       if (currentDisplayMode === "days") {
@@ -3127,7 +3750,7 @@ document.addEventListener("DOMContentLoaded", () => {
   window.updateIntersectionAlerts = function() {
     const todayStr = todayISO();
     let hasAnyFutureIntersection = false;
-    
+    console.log("DBG updateIntersection: today=", todayStr, "shifts=", JSON.stringify(incomeShifts), "lessons=", JSON.stringify(getPrimaryGroupLessons()));
     incomeShifts.forEach(shift => {
       if (shift.date >= todayStr && !isIntersectionDismissed(shift.date)) {
         const dayLessons = getLessonsForDate(shift.date);
@@ -3653,7 +4276,11 @@ document.addEventListener("DOMContentLoaded", () => {
       // Бейджи пар — компактные, с временем начала и конца пары
       dayLessons.forEach(l => {
         const badge = document.createElement('div');
-        badge.className = 'text-[9px] sm:text-[10px] font-semibold px-1 py-[1px] rounded truncate leading-tight bg-primary/10 text-primary dark:text-[#b5bcff] border border-primary/20 dark:border-primary/30';
+        const lessonColor = getLessonColorHex(l.type);
+        badge.className = 'text-[9px] sm:text-[10px] font-semibold px-1 py-[1px] rounded truncate leading-tight border';
+        badge.style.backgroundColor = lessonColor;
+        badge.style.color = getContrastColor(lessonColor);
+        badge.style.borderColor = lessonColor;
         badge.innerText = `${l.time} ${getShortSubjectName(l)}`;
         badge.title = `${l.subject} (${l.type})\n${l.time}\nАуд. ${l.room}\n${l.teacher}`;
         container.appendChild(badge);
