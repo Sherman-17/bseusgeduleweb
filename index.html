@@ -375,6 +375,20 @@
       color: #10b981;
     }
 
+    /* Режим дохода на ПК (кнопка #income-toggle) — активное состояние
+       загорается зелёным, как кнопка дохода в нижней панели на смартфоне */
+    #income-toggle.income-active {
+      background: rgba(16,185,129,0.12);
+      color: #10b981;
+    }
+    #income-toggle.income-active .material-symbols-outlined {
+      font-variation-settings: 'FILL' 1;
+    }
+    .dark #income-toggle.income-active {
+      background: rgba(16,185,129,0.16);
+      color: #34d399;
+    }
+
     /* Show bottom nav on mobile */
     @media (max-width: 639px) {
       .mobile-bottom-nav {
@@ -385,10 +399,6 @@
       }
       /* Hide top mode buttons on mobile */
       .top-mode-desktop {
-        display: none !important;
-      }
-      /* Кнопка установки PWA — только для рабочего стола */
-      #install-btn {
         display: none !important;
       }
       /* Кнопка «Учёт доходов» в шапке — только для ПК (на смартфоне её дублирует нижняя панель) */
@@ -435,6 +445,34 @@
     }
 
     /* Responsive card improvements */
+    @media (max-width: 640px) {
+      .lesson-card {
+        padding: 14px !important;
+      }
+      .lesson-card .text-lg {
+        font-size: 0.9rem !important;
+      }
+      .lesson-card h3.text-lg {
+        font-size: 0.95rem !important;
+      }
+      .min-w-\[64px\] {
+        min-width: 52px !important;
+      }
+      .lesson-card .gap-6 {
+        gap: 10px !important;
+      }
+      /* Длинное ДЗ не выходит за пределы карточки на мобильных */
+      .lesson-card .homework-block {
+        min-width: 0 !important;
+      }
+      .lesson-card .homework-block > div {
+        min-width: 0 !important;
+      }
+      .lesson-card .homework-block span {
+        word-break: break-word;
+        overflow-wrap: break-word;
+      }
+    }
     @media (max-width: 480px) {
       .lesson-card {
         padding: 14px !important;
@@ -680,17 +718,29 @@
       border-color: #0f172a;
     }
 
-    /* Кастомная анимация мигания красным для кнопки дохода при пересечении */
+    /* Кастомная анимация мигания красным для кнопки дохода при пересечении.
+       Важно: заливка фона делается ДОСТАТОЧНО насыщенной, т.к. свечение
+       (box-shadow) обрезается overflow-hidden на навигационной панели,
+       и иначе сигнал почти не виден. */
     @keyframes income-blink-red {
-      0%, 100% { background-color: rgba(239, 68, 68, 0.12); color: #ef4444; box-shadow: 0 0 10px 2px rgba(239, 68, 68, 0.35); transform: scale(1); }
-      15% { background-color: rgba(239, 68, 68, 0.28); color: #dc2626; box-shadow: 0 0 22px 7px rgba(239, 68, 68, 0.55); transform: scale(1.08); }
-      30% { background-color: rgba(239, 68, 68, 0.40); color: #dc2626; box-shadow: 0 0 30px 11px rgba(239, 68, 68, 0.75); transform: scale(1.12); }
-      50% { background-color: rgba(239, 68, 68, 0.18); color: #ef4444; box-shadow: 0 0 16px 4px rgba(239, 68, 68, 0.45); transform: scale(1.04); }
+       0%, 100% { background-color: #ef4444; color: #ffffff; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); transform: scale(1); }
+       50% { background-color: #dc2626; color: #ffffff; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); transform: scale(1.12); }
     }
     .income-blink {
-      animation: income-blink-red 1.2s ease-in-out infinite;
-      will-change: transform, background-color, color, box-shadow;
+      animation: income-blink-red 0.9s ease-in-out infinite !important;
+      will-change: transform, background-color, color;
       border-radius: 0.5rem;
+    }
+    /* Иконка монеты внутри кнопки дохода — белая при красном сигнале */
+    #income-toggle.income-blink .material-symbols-outlined {
+      color: #ffffff !important;
+    }
+    /* Красное свечение и на кнопке дохода в нижней навигации (смартфоны),
+       т.к. там верхняя кнопка #income-toggle скрыта. Анимация income-blink-red
+       сама перекрывает зелёное активное состояние (.active), поэтому явный
+       статический фон не нужен — иначе он «замораживает» пульсацию. */
+    .mobile-bottom-nav-btn.income-btn.income-blink .material-symbols-outlined,
+    .mobile-bottom-nav-btn.income-btn.income-blink .nav-label {
       color: #ef4444 !important;
     }
 
@@ -996,6 +1046,18 @@
       .lesson-card:has(> .att-toggle) .flex-grow {
         padding-right: 44px;
       }
+      /* Карточка пары: левая колонка с временем фиксированной ширины,
+         правая (flex-grow) — должна сжиматься, иначе длинное ДЗ
+         вываливается за правую границу карточки (overflow-hidden его обрезает) */
+      .lesson-card .flex-grow {
+        min-width: 0;
+      }
+      .lesson-card .homework-block {
+        min-width: 0;
+      }
+      .lesson-card .homework-block > div {
+        min-width: 0;
+      }
       .att-toggle .att-state-btn:focus-visible {
         outline: 2px solid #4f59a4;
         outline-offset: -2px;
@@ -1053,8 +1115,8 @@
   
   <!-- Навигация -->
   <nav class="bg-surface-container-lowest/80 dark:bg-slate-900/80 backdrop-blur-md font-manrope font-bold tracking-tight top-0 sticky z-50 border-b border-outline-variant/10 box-border w-full max-w-full overflow-hidden" style="-webkit-backdrop-filter: blur(12px);">
-    <div class="flex justify-between items-center px-4 sm:px-8 py-2 sm:py-3 max-w-[1440px] mx-auto w-full box-border">
-      <div class="text-lg sm:text-xl font-extrabold text-primary dark:text-[#b5bcff]">
+    <div class="flex justify-between items-center px-4 sm:px-8 py-2 sm:py-3 max-w-[1440px] mx-auto w-full box-border" style="padding-top: max(0.5rem, env(safe-area-inset-top));">
+      <div id="app-title" class="text-lg sm:text-xl font-extrabold text-primary dark:text-[#b5bcff] cursor-pointer select-none" title="Зажмите, чтобы сбросить состояние первого запуска">
         БГЭУ Расписание
       </div>
       
@@ -1084,10 +1146,6 @@
         <!-- Кнопка переключения тёмной темы -->
         <button id="theme-toggle" class="p-1.5 sm:p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all text-primary dark:text-primary-fixed flex items-center justify-center cursor-pointer" title="Переключить тему">
           <span class="material-symbols-outlined" id="theme-toggle-icon">dark_mode</span>
-        </button>
-        <!-- Кнопка установки PWA (появляется, когда браузер предлагает установку) -->
-        <button id="install-btn" class="hidden p-1.5 sm:p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all text-primary dark:text-[#b5bcff] flex items-center justify-center cursor-pointer" title="Установить приложение на рабочий стол">
-          <span class="material-symbols-outlined text-xl sm:text-2xl">install_mobile</span>
         </button>
       </div>
     </div>
@@ -1829,6 +1887,29 @@
         </span>
         <span class="nav-label">Доход</span>
       </button>
+    </div>
+  </div>
+
+  <!-- Модалка сброса состояния первого запуска (вызывается долгим нажатием
+       на заголовок «БГЭУ Расписание» — 5 секунд). Полезно на смартфоне,
+       где нет консоли разработчика. -->
+  <div id="reset-state-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-3 sm:p-4 hidden transition-opacity duration-300 opacity-0">
+    <div class="bg-white dark:bg-slate-900 rounded-2xl p-5 sm:p-6 w-full max-w-sm shadow-2xl transition-transform duration-300 scale-95">
+      <div class="flex items-center gap-3 mb-3">
+        <span class="material-symbols-outlined text-3xl text-rose-500">restart_alt</span>
+        <h3 class="text-lg font-extrabold text-on-surface dark:text-white">Сбросить состояние</h3>
+      </div>
+      <p class="text-sm text-on-surface-variant dark:text-slate-400 mb-5 leading-relaxed">
+        Это удалит сохранённую группу, расписание, данные режима дохода, посещаемость и все настройки. Приложение снова откроется как при первом запуске.
+      </p>
+      <div class="flex gap-3">
+        <button id="reset-state-cancel" class="flex-1 px-4 py-2.5 rounded-xl font-semibold text-on-surface-variant dark:text-slate-300 bg-surface-container-low dark:bg-slate-800 hover:bg-surface-container-high dark:hover:bg-slate-700 transition-all cursor-pointer">
+          Отмена
+        </button>
+        <button id="reset-state-confirm" class="flex-1 px-4 py-2.5 rounded-xl font-bold text-white bg-rose-500 hover:bg-rose-600 transition-all cursor-pointer">
+          Сбросить
+        </button>
+      </div>
     </div>
   </div>
 

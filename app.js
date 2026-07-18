@@ -681,6 +681,84 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // Долгое нажатие (5 сек) на заголовок «БГЭУ Расписание» открывает
+  // модалку сброса состояния первого запуска. Удобно на смартфоне,
+  // где нет консоли разработчика для очистки localStorage.
+  const appTitleEl = document.getElementById("app-title");
+  const resetStateModal = document.getElementById("reset-state-modal");
+  const resetStateConfirm = document.getElementById("reset-state-confirm");
+  const resetStateCancel = document.getElementById("reset-state-cancel");
+  let titleLongPressTimer = null;
+  const TITLE_LONG_PRESS_MS = 5000;
+
+  function showResetStateModal() {
+    if (!resetStateModal) return;
+    resetStateModal.classList.remove("hidden");
+    requestAnimationFrame(() => {
+      resetStateModal.classList.remove("opacity-0");
+      resetStateModal.classList.add("opacity-100");
+      const card = resetStateModal.querySelector(".bg-white, .dark\\:bg-slate-900");
+      if (card) {
+        card.classList.remove("scale-95");
+        card.classList.add("scale-100");
+      }
+    });
+  }
+
+  function hideResetStateModal() {
+    if (!resetStateModal) return;
+    resetStateModal.classList.remove("opacity-100");
+    resetStateModal.classList.add("opacity-0");
+    const card = resetStateModal.querySelector(".bg-white, .dark\\:bg-slate-900");
+    if (card) {
+      card.classList.remove("scale-100");
+      card.classList.add("scale-95");
+    }
+    setTimeout(() => resetStateModal.classList.add("hidden"), 300);
+  }
+
+  function startTitleLongPress() {
+    if (titleLongPressTimer) return;
+    titleLongPressTimer = setTimeout(() => {
+      titleLongPressTimer = null;
+      showResetStateModal();
+    }, TITLE_LONG_PRESS_MS);
+  }
+
+  function cancelTitleLongPress() {
+    if (titleLongPressTimer) {
+      clearTimeout(titleLongPressTimer);
+      titleLongPressTimer = null;
+    }
+  }
+
+  if (appTitleEl) {
+    appTitleEl.addEventListener("touchstart", (e) => { e.preventDefault(); startTitleLongPress(); }, { passive: false });
+    appTitleEl.addEventListener("touchend", cancelTitleLongPress);
+    appTitleEl.addEventListener("touchmove", cancelTitleLongPress);
+    appTitleEl.addEventListener("touchcancel", cancelTitleLongPress);
+    // Для десктопа/мыши — зажатие левой кнопки
+    appTitleEl.addEventListener("mousedown", startTitleLongPress);
+    appTitleEl.addEventListener("mouseup", cancelTitleLongPress);
+    appTitleEl.addEventListener("mouseleave", cancelTitleLongPress);
+    appTitleEl.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+
+  if (resetStateCancel) resetStateCancel.addEventListener("click", hideResetStateModal);
+  if (resetStateModal) {
+    resetStateModal.addEventListener("click", (e) => {
+      if (e.target === resetStateModal) hideResetStateModal();
+    });
+  }
+  if (resetStateConfirm) {
+    resetStateConfirm.addEventListener("click", () => {
+      try { localStorage.clear(); } catch (e) { /* ignore */ }
+      hideResetStateModal();
+      // Перезагружаем, чтобы приложение открылось как при первом запуске
+      setTimeout(() => location.reload(), 300);
+    });
+  }
+
   // Каскадные выпадающие списки
   facultySelect.addEventListener("change", async () => {
     resetSelect(formSelect, "Загрузка форм...");
@@ -1753,40 +1831,60 @@ document.addEventListener("DOMContentLoaded", () => {
   function getLessonStyles(type) {
     if (!type) return { border: 'bg-slate-400', badge: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400' };
     const t = type.toLowerCase();
-    
-    if (t.includes("л")) { // лекция
-      return { 
-        border: 'bg-violet-600', 
-        badge: 'bg-violet-100 dark:bg-violet-950/40 text-violet-600 dark:text-violet-400' 
+
+    if (t.includes("куратор")) { // кураторский час
+      return {
+        border: 'bg-slate-500',
+        borderColor: 'border-slate-300 dark:border-slate-700',
+        badge: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
       };
     }
-    if (t.includes("п") || t.includes("с")) { // практика / семинар
-      return { 
-        border: 'bg-emerald-600', 
-        badge: 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400' 
+    if (t.includes("конс")) { // консультация
+      return {
+        border: 'bg-violet-600',
+        borderColor: 'border-violet-300 dark:border-violet-900/50',
+        badge: 'bg-violet-100 dark:bg-violet-950/40 text-violet-600 dark:text-violet-400'
+      };
+    }
+    if (t.includes("экз")) { // экзамен
+      return {
+        border: 'bg-red-600',
+        borderColor: 'border-red-300 dark:border-red-900/50',
+        badge: 'bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400'
+      };
+    }
+    if (t.includes("зач")) { // зачёт
+      return {
+        border: 'bg-yellow-500',
+        borderColor: 'border-yellow-300 dark:border-yellow-900/50',
+        badge: 'bg-yellow-100 dark:bg-yellow-950/40 text-yellow-600 dark:text-yellow-400'
+      };
+    }
+    if (t.includes("л")) { // лекция
+      return {
+        border: 'bg-green-600',
+        borderColor: 'border-green-300 dark:border-green-900/50',
+        badge: 'bg-green-100 dark:bg-green-950/40 text-green-600 dark:text-green-400'
+      };
+    }
+    if (t.includes("п") || t.includes("сем")) { // практика / семинар
+      return {
+        border: 'bg-blue-600',
+        borderColor: 'border-blue-300 dark:border-blue-900/50',
+        badge: 'bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
       };
     }
     if (t.includes("лаб") || t.includes("л.р") || t.includes("комп")) { // лаборатория
-      return { 
-        border: 'bg-amber-600', 
-        badge: 'bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400' 
+      return {
+        border: 'bg-blue-600',
+        borderColor: 'border-blue-300 dark:border-blue-900/50',
+        badge: 'bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
       };
     }
-    if (t.includes("к") || t.includes("конс")) { // консультация
-      return { 
-        border: 'bg-blue-600', 
-        badge: 'bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400' 
-      };
-    }
-    if (t.includes("э") || t.includes("экз")) { // экзамен
-      return { 
-        border: 'bg-rose-600', 
-        badge: 'bg-rose-100 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400' 
-      };
-    }
-    return { 
-      border: 'bg-slate-400', 
-      badge: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400' 
+    return {
+      border: 'bg-slate-400',
+      borderColor: 'border-slate-300 dark:border-slate-700',
+      badge: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
     };
   }
 
@@ -1795,11 +1893,13 @@ document.addEventListener("DOMContentLoaded", () => {
   function getLessonColorHex(type) {
     if (!type) return '#94a3b8';
     const t = type.toLowerCase();
-    if (t.includes("л")) return '#7c3aed';
-    if (t.includes("п") || t.includes("с")) return '#059669';
-    if (t.includes("лаб") || t.includes("л.р") || t.includes("комп")) return '#d97706';
-    if (t.includes("к") || t.includes("конс")) return '#2563eb';
-    if (t.includes("э") || t.includes("экз")) return '#e11d48';
+    if (t.includes("куратор")) return '#64748b';
+    if (t.includes("конс")) return '#7c3aed';
+    if (t.includes("экз")) return '#dc2626';
+    if (t.includes("зач")) return '#eab308';
+    if (t.includes("л")) return '#16a34a';
+    if (t.includes("п") || t.includes("сем")) return '#2563eb';
+    if (t.includes("лаб") || t.includes("л.р") || t.includes("комп")) return '#2563eb';
     return '#94a3b8';
   }
 
@@ -3042,7 +3142,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!typeStr) return false;
     const t = typeStr.toLowerCase().trim();
     // Точное совпадение по одному символу или по полному названию
-    return t === 'э' || t === 'з' || t === 'к' || 
+    return t === 'э' || t === 'з' || 
            t.includes('экз') || t.includes('зач') || t.includes('конс');
   }
 
@@ -3117,7 +3217,7 @@ document.addEventListener("DOMContentLoaded", () => {
       daySection.className = "day-section mb-10";
       
       const dayHeader = document.createElement("div");
-      dayHeader.className = "day-header text-sm font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider mb-4 pb-2 border-b border-rose-200 dark:border-rose-900/50 flex items-center gap-2";
+      dayHeader.className = "day-header text-sm font-bold text-on-surface-variant dark:text-slate-400 uppercase tracking-wider mb-4 pb-2 border-b border-outline-variant/20 dark:border-slate-800 flex items-center gap-2";
       
       const isIsoDate = /^\d{4}-\d{2}-\d{2}$/.test(dateKey);
       if (isIsoDate) {
@@ -3138,7 +3238,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const styles = getLessonStyles(l.type);
         
         const card = document.createElement("div");
-        card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-rose-200/30 dark:border-rose-900/30 shadow-sm relative overflow-hidden group lesson-card";
+        card.className = `bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border ${styles.borderColor} shadow-sm relative overflow-hidden group lesson-card`;
         card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
         card._lesson = l;
         card.dataset.attKey = getAttendanceKey(l);
@@ -3293,10 +3393,40 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 300);
   }
 
+  // Гарантирует, что в селекте есть опция с нужным value (и выбрана),
+  // даже если каскадная загрузка списков с сервера не удалась. Без этого
+  // при сбое сети value не «прилипает» к select и getSchedule получает "-1",
+  // из-за чего группа по умолчанию не загружается автоматически.
+  function ensureSelectValue(sel, value, text) {
+    if (!sel || !value || value === "-1") return;
+    let opt = Array.from(sel.options).find(o => o.value === value);
+    if (!opt) {
+      opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = text || value;
+      sel.appendChild(opt);
+    }
+    sel.disabled = false;
+    sel.value = value;
+  }
+
   async function applyGroupState(state, opts = {}) {
     isDefaultGroupActive = true; // загружается основная группа по умолчанию
     setDefaultGroupActiveState(true);
     updateDefaultGroupModeClass();
+    // Показываем элементы режима «По группе», которые иначе скрыты до
+    // первого вызова setActiveTab("group"). Без этого расписание
+    // рендерится в скрытый контейнер и не видно до повторного переключения.
+    if (typeof dayStripContainer !== 'undefined' && dayStripContainer) {
+      dayStripContainer.classList.remove('hidden');
+    }
+    if (typeof scheduleToolbar !== 'undefined' && scheduleToolbar) {
+      scheduleToolbar.classList.toggle("hidden", !(window.cachedLessons && window.cachedLessons.length));
+    }
+    periodSection.style.display = 'block';
+    modeDaysBtn.classList.remove("hidden");
+    modeSemesterBtn.classList.remove("hidden");
+    modeExamsBtn.classList.remove("hidden");
     // Сбрасываем все top-mode кнопки в неактивное состояние
     const topGroup = document.getElementById("top-mode-group");
     const topTeacher = document.getElementById("top-mode-teacher");
@@ -3313,7 +3443,7 @@ document.addEventListener("DOMContentLoaded", () => {
       heroSection.classList.add('!pt-0', '!pb-0');
     }
     
-    facultySelect.value = state.faculty;
+    ensureSelectValue(facultySelect, state.faculty);
 
     // Каскад загрузок делаем устойчивым к сбоям сети:
     // при ошибке оставляем ранее заполненные списки (они уже валидны
@@ -3327,6 +3457,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       console.warn("Не удалось обновить формы, используем ранее загруженные:", e);
     }
+    ensureSelectValue(formSelect, state.form);
 
     try {
       resetSelect(courseSelect, "Загрузка курсов...");
@@ -3336,6 +3467,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       console.warn("Не удалось обновить курсы, используем ранее загруженные:", e);
     }
+    ensureSelectValue(courseSelect, state.course);
 
     try {
       resetSelect(groupSelect, "Загрузка групп...");
@@ -3345,7 +3477,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       console.warn("Не удалось обновить группы, используем ранее загруженные:", e);
     }
-    groupSelect.value = state.group;
+    ensureSelectValue(groupSelect, state.group, state.groupText);
     applySelectAbbrev(facultySelect);
     applySelectAbbrev(groupSelect);
 
@@ -3750,7 +3882,7 @@ document.addEventListener("DOMContentLoaded", () => {
   window.updateIntersectionAlerts = function() {
     const todayStr = todayISO();
     let hasAnyFutureIntersection = false;
-    console.log("DBG updateIntersection: today=", todayStr, "shifts=", JSON.stringify(incomeShifts), "lessons=", JSON.stringify(getPrimaryGroupLessons()));
+    
     incomeShifts.forEach(shift => {
       if (shift.date >= todayStr && !isIntersectionDismissed(shift.date)) {
         const dayLessons = getLessonsForDate(shift.date);
@@ -3775,9 +3907,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (hasAnyFutureIntersection) {
         incomeDot.classList.remove("hidden");
         incomeToggle.classList.add("income-blink");
+        const bottomIncomeBtn = document.getElementById("bottom-income-btn");
+        if (bottomIncomeBtn) bottomIncomeBtn.classList.add("income-blink");
       } else {
         incomeDot.classList.add("hidden");
         incomeToggle.classList.remove("income-blink");
+        const bottomIncomeBtn = document.getElementById("bottom-income-btn");
+        if (bottomIncomeBtn) bottomIncomeBtn.classList.remove("income-blink");
       }
     }
   };
@@ -3785,6 +3921,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Подсветка стрелок переключения месяца, если пересечение смен с парами есть в соседнем месяце
   function shiftHasClassIntersection(shift) {
     if (isIntersectionDismissed(shift.date)) return false;
+    // Стрелки месяцев сигнализируют только о будущих пересечениях
+    if (shift.date < todayISO()) return false;
     const dayLessons = getLessonsForDate(shift.date);
     if (!dayLessons.length) return false;
     const shiftStartMin = parseTimeToMinutes(shift.startTime);
@@ -3834,20 +3972,24 @@ document.addEventListener("DOMContentLoaded", () => {
     if (window.isInIncomeMode) {
       scheduleViewContainer.classList.add("hidden");
       incomeViewContainer.classList.remove("hidden");
-      incomeToggle.classList.add("bg-primary/20", "text-primary-fixed-dim");
-      
+      incomeToggle.classList.add("income-active");
+
       // Сбрасываем отображение верхней панели выбора, если она была открыта
       loadRates();
     } else {
       exitIncomeMode();
     }
+    // Пересчитываем сигнал пересечения: красный мигающий индикатор должен
+    // сохраняться при входе/выходе из режима дохода (приоритет над зелёным)
+    if (typeof updateIntersectionAlerts === "function") updateIntersectionAlerts();
   }
 
   window.exitIncomeMode = function() {
     window.isInIncomeMode = false;
     scheduleViewContainer.classList.remove("hidden");
     incomeViewContainer.classList.add("hidden");
-    incomeToggle.classList.remove("bg-primary/20", "text-primary-fixed-dim");
+    incomeToggle.classList.remove("income-active");
+    if (typeof updateIntersectionAlerts === "function") updateIntersectionAlerts();
   };
 
   // Логика калькулятора доходов и валютных ставок
@@ -4793,49 +4935,12 @@ window.updateIntersectionAlerts = function() {
   if (bottomNavDot && incomeDot) {
     bottomNavDot.style.display = incomeDot.style.display || (incomeDot.classList.contains('hidden') ? 'none' : 'block');
   }
+  // Стрелки переключения месяца/периода используют тот же принцип
+  // сигнализации о пересечении (прошлое и будущее, кроме отклонённых)
+  if (typeof updateMonthArrowAlerts === 'function') updateMonthArrowAlerts();
 };
 
-// ===== Предложение установить PWA на рабочий стол =====
-let deferredInstallPrompt = null;
-
-function showInstallButton() {
-  const btn = document.getElementById('install-btn');
-  if (btn) btn.classList.remove('hidden');
-}
-
-function hideInstallButton() {
-  const btn = document.getElementById('install-btn');
-  if (btn) btn.classList.add('hidden');
-}
-
-window.addEventListener('beforeinstallprompt', (e) => {
-  // На десктопе перехватываем событие и показываем свою кнопку установки,
-  // чтобы браузер предлагал добавить веб-приложение на рабочий стол.
-  // На смартфоне не вызываем preventDefault — браузер покажет нативное
-  // предложение установки самостоятельно.
-  const isDesktop = window.matchMedia('(min-width: 640px)').matches;
-  if (isDesktop) {
-    e.preventDefault();
-    deferredInstallPrompt = e;
-    showInstallButton();
-  }
-});
-
-window.addEventListener('appinstalled', () => {
-  deferredInstallPrompt = null;
-  hideInstallButton();
-});
-
-const installBtn = document.getElementById('install-btn');
-if (installBtn) {
-  installBtn.addEventListener('click', async () => {
-    if (!deferredInstallPrompt) return;
-    deferredInstallPrompt.prompt();
-    const choiceResult = await deferredInstallPrompt.userChoice;
-    if (choiceResult.outcome === 'accepted') {
-      deferredInstallPrompt = null;
-      hideInstallButton();
-    }
-  });
-}
+// ===== PWA: Регистрация service worker =====
+// Service worker уже зарегистрирован в начале файла для кэширования
+// Браузер сам предложит установить PWA при соответствии критериям
 
