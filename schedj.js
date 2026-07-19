@@ -615,6 +615,30 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     return buffer.toString('utf-8');
   }
 
+  // Proxy to studhub.by JSON API (audiences + audience schedule). studhub
+  // returns JSON, ??????? ????????????? windows-1251 ?? ?????????.
+  function handleStudhubProxy(targetUrl, res) {
+    fetch(targetUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'api-version': '1.0',
+        'Origin': 'https://studhub.by',
+        'Referer': 'https://studhub.by/bseu/schedule/audiences',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    }).then(function (response) {
+      return response.text().then(function (body) {
+        var contentType = response.headers.get('content-type') || 'application/json; charset=utf-8';
+        res.writeHead(response.status, { 'Content-Type': contentType, 'Access-Control-Allow-Origin': '*' });
+        res.end(body);
+      });
+    }).catch(function (err) {
+      res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'proxy_failed', message: err.message }));
+    });
+  }
+
   // Proxy to BSEU schedule endpoint so the browser can fetch forms/courses/groups.
   function handleProxy(req, res) {
     var bodyChunks = [];
@@ -661,6 +685,30 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       handleProxy(req, res);
       return;
     }
+
+    // --- ?????????? ?? ?????????? (API studhub.by) ---
+    // ?????? ?????????.
+    if (pathname === '/api/audiences' && req.method === 'GET') {
+      handleStudhubProxy('https://studhub.by/Schedule/3/audiences?', res);
+      return;
+    }
+    // ?????????? ?????????? ????????? ?? ????.
+    if (pathname === '/api/schedule' && req.method === 'GET') {
+      var q = parsed.searchParams;
+      var audience = (q.get('audience') || '').trim();
+      var date = (q.get('date') || '').trim();
+      if (!audience || !date) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'missing_params' }));
+        return;
+      }
+      handleStudhubProxy(
+        'https://studhub.by/Schedule/3/audiences/' + encodeURIComponent(audience) + '/schedule/date/' + encodeURIComponent(date),
+        res
+      );
+      return;
+    }
+
 
     var file = pathname === '/' ? 'index.html' : pathname;
     var filePath = path.join(__dirname, file.split('?')[0]);

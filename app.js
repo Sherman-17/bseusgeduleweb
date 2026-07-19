@@ -4959,12 +4959,12 @@ let deferredInstallPrompt = null;
 const PWA_DISMISSED_KEY = "bseu_pwa_dismissed";
 
 function showInstallButton() {
-  const btn = document.getElementById('install-btn');
+  const btn = document.getElementById('account-menu-install');
   if (btn) btn.classList.remove('hidden');
 }
 
 function hideInstallButton() {
-  const btn = document.getElementById('install-btn');
+  const btn = document.getElementById('account-menu-install');
   if (btn) btn.classList.add('hidden');
 }
 
@@ -4986,12 +4986,11 @@ window.addEventListener('appinstalled', () => {
   try { localStorage.removeItem(PWA_DISMISSED_KEY); } catch (err) { /* ignore */ }
 });
 
-const installBtn = document.getElementById('install-btn');
+const installBtn = document.getElementById('account-menu-install');
 if (installBtn) {
   installBtn.addEventListener('click', async () => {
     if (!deferredInstallPrompt) {
-      // На всякий случай: если событие ещё не пришло, подсказываем
-      // установку через меню браузера.
+      alert('Чтобы установить приложение, откройте меню браузера (⋮) и выберите «Установить приложение» / «Добавить на главный экран».');
       return;
     }
     deferredInstallPrompt.prompt();
@@ -5344,16 +5343,6 @@ if (installBtn) {
     }
   });
 
-  if (menuInstall) {
-    menuInstall.addEventListener('click', () => {
-      hideMenu();
-      if (typeof deferredInstallPrompt !== 'undefined' && deferredInstallPrompt) {
-        deferredInstallPrompt.prompt();
-      } else {
-        alert('Чтобы установить приложение, откройте меню браузера (⋮) и выберите «Установить приложение» / «Добавить на главный экран».');
-      }
-    });
-  }
   if (menuCreate) menuCreate.addEventListener('click', () => { hideMenu(); openAccountModal(false); });
   if (menuLogout) menuLogout.addEventListener('click', async () => {
     hideMenu();

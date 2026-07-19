@@ -1153,7 +1153,7 @@
             <div id="account-menu-status" class="px-3 py-2 text-xs sm:text-sm font-semibold text-on-surface-variant/70 dark:text-slate-400 border-b border-outline-variant/10 dark:border-slate-700 mb-1 truncate">
               Не авторизован
             </div>
-            <button id="account-menu-install" class="flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold text-on-surface dark:text-slate-200 hover:bg-primary/10 dark:hover:bg-[#b5bcff]/10 transition-all cursor-pointer text-left">
+            <button id="account-menu-install" class="hidden flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold text-on-surface dark:text-slate-200 hover:bg-primary/10 dark:hover:bg-[#b5bcff]/10 transition-all cursor-pointer text-left">
               <span class="material-symbols-outlined text-base">install_mobile</span>
               <span>Скачать приложение</span>
             </button>
@@ -1171,11 +1171,6 @@
             </button>
           </div>
         </div>
-        <!-- Кнопка установки PWA (показывается, когда браузер готов
-             предложить установку; скрыта до этого момента) -->
-        <button id="install-btn" class="hidden p-1.5 sm:p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all text-primary dark:text-[#b5bcff] flex items-center justify-center cursor-pointer" title="Установить приложение на рабочий стол">
-          <span class="material-symbols-outlined text-xl sm:text-2xl">install_mobile</span>
-        </button>
         <!-- Кнопка переключения тёмной темы -->
         <button id="theme-toggle" class="p-1.5 sm:p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all text-primary dark:text-primary-fixed flex items-center justify-center cursor-pointer" title="Переключить тему">
           <span class="material-symbols-outlined" id="theme-toggle-icon">dark_mode</span>
