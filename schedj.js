@@ -579,7 +579,6 @@ function aTabs() {
 	this.thdrs[0].htmlO.className='active';
 }
 
-//id of tab, rest params - list of additional controls
 aTabs.prototype.addCtrls=function(id){
 	for (var i=0;i<this.names.length&&this.names[i]!=id;i++){}
 	this.thdrs[i].addCtrl(arguments)
@@ -595,60 +594,19 @@ aTabs.prototype.Deactivate=function(){
 // because `window` is defined; on the server we start an HTTP server that
 // serves this file and listens on process.env.PORT as required by Render.
 if (typeof window === 'undefined' && typeof require !== 'undefined') {
-  var http = require('http');
-  var fs = require('fs');
-  var path = require('path');
-  var iconv = require('iconv-lite');
-  var PORT = process.env.PORT || 3000;
+  const express = require('express');
+  const path = require('path');
+  const fs = require('fs');
+  const iconv = require('iconv-lite');
+  const cheerio = require('cheerio');
+  const PORT = process.env.PORT || 3000;
 
-  // Используем __dirname для надёжного разрешения пути к auth-модулю
-  // независимо от текущего рабочего каталога на хостинге.
-  // Пробуем несколько вариантов расположения папки server относительно schedj.js.
-  var AUTH_MODULE_CANDIDATES = [
+  // Используем __dirname для надежного разрешения пути к auth-модулю
+  const AUTH_MODULE_CANDIDATES = [
     path.join(__dirname, 'server', 'auth'),
     path.join(__dirname, '..', 'server', 'auth')
   ];
 
-  // BSEU declares UTF-8 but actually returns windows-1251 bytes. We try to
-  // decode as win1251; if the result contains genuine cyrillic letters we use
-  // it, otherwise we fall back to UTF-8.
-  function hasCyrillic(str) {
-    return /[?-??-???]/.test(str);
-  }
-  function decodeBuffer(buffer) {
-    try {
-      var win = iconv.decode(buffer, 'win1251');
-      if (hasCyrillic(win)) return win;
-    } catch (e) {}
-    return buffer.toString('utf-8');
-  }
-
-  // Proxy to studhub.by JSON API (audiences + audience schedule). studhub
-  // returns JSON, ??????? ????????????? windows-1251 ?? ?????????.
-  function handleStudhubProxy(targetUrl, res) {
-    fetch(targetUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'api-version': '1.0',
-        'Origin': 'https://studhub.by',
-        'Referer': 'https://studhub.by/bseu/schedule/audiences',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
-    }).then(function (response) {
-      return response.text().then(function (body) {
-        var contentType = response.headers.get('content-type') || 'application/json; charset=utf-8';
-        res.writeHead(response.status, { 'Content-Type': contentType, 'Access-Control-Allow-Origin': '*' });
-        res.end(body);
-      });
-    }).catch(function (err) {
-      res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: 'proxy_failed', message: err.message }));
-    });
-  }
-
-  // --- ???????? ? ????????????? (?????+??????, ??? email) ---
-  // ?????????????? ??????? ?????? ?? server/auth.js (SQLite + bcrypt).
   var auth;
   for (var i = 0; i < AUTH_MODULE_CANDIDATES.length; i++) {
     try {
@@ -659,18 +617,9 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       console.error('[AUTH] Failed to load auth module from', AUTH_MODULE_CANDIDATES[i], ':', e.message);
     }
   }
+
+  // Fallback search
   if (!auth) {
-    console.error('[AUTH] Auth module could not be loaded from any candidate path');
-    console.error('[AUTH] __dirname =', __dirname);
-    console.error('[AUTH] process.cwd() =', process.cwd());
-    console.error('[AUTH] Listing server/ directory:');
-    try {
-      var serverDir = path.join(__dirname, 'server');
-      console.error('[AUTH] server dir contents:', fs.readdirSync(serverDir));
-    } catch (e2) {
-      console.error('[AUTH] Cannot list server dir:', e2.message);
-    }
-    // Последний fallback: ищем server/auth.js рекурсивно в родительских директориях
     try {
       var searchDir = __dirname;
       for (var depth = 0; depth < 5; depth++) {
@@ -686,251 +635,845 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     } catch (e4) {}
   }
 
-  var COOKIE_NAME = 'bseu_session';
-  var AUTH_RATE_LIMIT = 5;
-  var AUTH_RATE_WINDOW = 60 * 1000;
-  var authAttempts = {}; // ip -> { count, resetAt }
+  const app = express();
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
 
-  function parseCookies(req) {
-    var raw = req.headers.cookie || '';
-    var out = {};
-    raw.split(';').forEach(function (pair) {
-      var idx = pair.indexOf('=');
+  // Cookie parser
+  const COOKIE_NAME = 'bseu_session';
+  app.use((req, res, next) => {
+    const raw = req.headers.cookie || '';
+    const cookies = {};
+    raw.split(';').forEach(pair => {
+      const idx = pair.indexOf('=');
       if (idx === -1) return;
-      var k = pair.slice(0, idx).trim();
-      var v = pair.slice(idx + 1).trim();
-      if (k) out[k] = decodeURIComponent(v);
+      const k = pair.slice(0, idx).trim();
+      const v = pair.slice(idx + 1).trim();
+      if (k) cookies[k] = decodeURIComponent(v);
     });
-    return out;
+    req.cookies = cookies;
+    res.cookie = (name, value, opts = {}) => {
+      let str = `${name}=${encodeURIComponent(value)}`;
+      if (opts.maxAge) str += `; Max-Age=${Math.floor(opts.maxAge / 1000)}`;
+      str += '; Path=' + (opts.path || '/');
+      if (opts.httpOnly) str += '; HttpOnly';
+      if (opts.sameSite) str += `; SameSite=${opts.sameSite}`;
+      res.setHeader('Set-Cookie', str);
+    };
+    res.clearCookie = (name, opts = {}) => {
+      res.setHeader('Set-Cookie', `${name}=; Path=${opts.path || '/'}; Max-Age=0; HttpOnly`);
+    };
+    next();
+  });
+
+  // ===== File-based cache layer =====
+  // Вместо БД кэш хранится в JSON-файлах внутри папки .cache/
+  // (создаётся рядом с сервером). Каждая запись — отдельный файл,
+  // названный по хэшу ключа. Это упрощает отладку и не требует SQLite.
+  const CACHE_DIR = path.join(__dirname, '.cache');
+  function ensureCacheDir() {
+    try {
+      if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+    } catch (e) {
+      console.error('[FileCache] Cannot create cache dir:', e.message);
+    }
   }
+  ensureCacheDir();
+
+  function cacheFilePath(key) {
+    const safe = Buffer.from(key).toString('base64').replace(/[/+=]/g, '_');
+    return path.join(CACHE_DIR, `${safe}.json`);
+  }
+
+  function fileGetCache(key) {
+    try {
+      const file = cacheFilePath(key);
+      if (!fs.existsSync(file)) return null;
+      const raw = fs.readFileSync(file, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return { value: parsed.value, updatedAt: parsed.updatedAt };
+    } catch (e) {
+      console.error('[FileCache] getCache error:', e.message);
+      return null;
+    }
+  }
+
+  function fileSetCache(key, value) {
+    try {
+      ensureCacheDir();
+      const file = cacheFilePath(key);
+      fs.writeFileSync(file, JSON.stringify({ value, updatedAt: Date.now() }), 'utf-8');
+    } catch (e) {
+      console.error('[FileCache] setCache error:', e.message);
+    }
+  }
+
   function getToken(req) {
-    var c = parseCookies(req);
-    return c[COOKIE_NAME] || '';
+    return req.cookies ? req.cookies[COOKIE_NAME] : null;
   }
-  function sendJson(res, status, obj, extraHeaders) {
-    var headers = { 'Content-Type': 'application/json; charset=utf-8' };
-    if (extraHeaders) Object.keys(extraHeaders).forEach(function (k) { headers[k] = extraHeaders[k]; });
-    res.writeHead(status, headers);
-    res.end(JSON.stringify(obj));
+  function sessionUser(req) {
+    const token = getToken(req);
+    return auth ? auth.getSession(token) : null;
   }
   function setSessionCookie(res, token) {
-    var str = COOKIE_NAME + '=' + encodeURIComponent(token) +
-      '; Max-Age=' + Math.floor((1000 * 60 * 60 * 24 * 30) / 1000) +
-      '; Path=/; HttpOnly; SameSite=Lax';
-    res.setHeader('Set-Cookie', str);
+    res.cookie(COOKIE_NAME, token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 1000 * 60 * 60 * 24 * 30,
+      path: '/'
+    });
   }
-  function clearSessionCookie(res) {
-    res.setHeader('Set-Cookie', COOKIE_NAME + '=; Path=/; Max-Age=0; HttpOnly');
-  }
+
+  // Rate limiter
+  const AUTH_RATE_LIMIT = 5;
+  const AUTH_RATE_WINDOW = 60 * 1000;
+  const authAttempts = new Map();
   function authRateLimited(ip) {
-    var now = Date.now();
-    var rec = authAttempts[ip];
+    const now = Date.now();
+    const rec = authAttempts.get(ip);
     if (!rec || rec.resetAt < now) {
-      authAttempts[ip] = { count: 1, resetAt: now + AUTH_RATE_WINDOW };
+      authAttempts.set(ip, { count: 1, resetAt: now + AUTH_RATE_WINDOW });
       return false;
     }
     rec.count += 1;
     return rec.count > AUTH_RATE_LIMIT;
   }
-  function readJsonBody(req, cb) {
-    var chunks = [];
-    req.on('data', function (c) { chunks.push(c); });
-    req.on('end', function () {
-      var raw = Buffer.concat(chunks).toString('utf-8');
-      // ?????????? ????? (#account-form) ???????????? ??????? ? iframe ???
-      // application/x-www-form-urlencoded (login=...&password=...). ????????????
-      // ??? ???????: urlencoded ? JSON.
-      var ct = (req.headers['content-type'] || '').toLowerCase();
-      if (ct.indexOf('application/x-www-form-urlencoded') !== -1) {
-        try {
-          var params = new URLSearchParams(raw);
-          var obj = {};
-          params.forEach(function (v, k) { obj[k] = v; });
-          cb(null, obj);
-        } catch (e) { cb(null, {}); }
-        return;
+  function guardAuth(req, res, next) {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (authRateLimited(ip)) {
+      return res.status(429).json({ error: 'Слишком много попыток. Попробуйте позже.' });
+    }
+    next();
+  }
+
+  // --- Auth endpoints ---
+  app.post('/api/auth/register', guardAuth, (req, res) => {
+    if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    try {
+      const { login, password } = req.body || {};
+      const user = auth.registerUser(login, password);
+      const token = auth.createSession(user.id, user.login);
+      setSessionCookie(res, token);
+      res.json({ ok: true, user: { login: user.login } });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/auth/login', guardAuth, (req, res) => {
+    if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    try {
+      const { login, password } = req.body || {};
+      const user = auth.verifyUser(login, password);
+      if (!user) return res.status(401).json({ error: 'Неверный логин или пароль' });
+      const token = auth.createSession(user.id, user.login);
+      setSessionCookie(res, token);
+      res.json({ ok: true, user: { login: user.login } });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    const token = getToken(req);
+    auth.destroySession(token);
+    res.clearCookie(COOKIE_NAME, { path: '/' });
+    res.json({ ok: true });
+  });
+
+  app.get('/api/auth/me', (req, res) => {
+    if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    const s = sessionUser(req);
+    if (!s) return res.json({ ok: true, user: null });
+    res.json({ ok: true, user: { login: s.login } });
+  });
+
+  app.delete('/api/auth/account', (req, res) => {
+    if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    const s = sessionUser(req);
+    if (!s) return res.status(401).json({ error: 'Не авторизован' });
+    auth.deleteUser(s.userId);
+    res.clearCookie(COOKIE_NAME, { path: '/' });
+    res.json({ ok: true });
+  });
+
+  app.get('/api/sync', (req, res) => {
+    if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    const s = sessionUser(req);
+    if (!s) return res.status(401).json({ error: 'Не авторизован' });
+    res.json({ ok: true, blocks: auth.getBlocks(s.userId) });
+  });
+
+  app.post('/api/sync', (req, res) => {
+    if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    const s = sessionUser(req);
+    if (!s) return res.status(401).json({ error: 'Не авторизован' });
+    const blocks = Array.isArray(req.body && req.body.blocks) ? req.body.blocks : [];
+    const valid = blocks.filter(b => b && typeof b.kind === 'string' && typeof b.payload === 'string');
+    const merged = auth.applyBlocks(s.userId, valid);
+    res.json({ ok: true, blocks: merged });
+  });
+
+  // --- REST Dropdowns and Schedule endpoints ---
+  
+  function toWin1251Url(str) {
+    const buf = iconv.encode(str, 'win1251');
+    let out = '';
+    for (let i = 0; i < buf.length; i++) {
+      const byte = buf[i];
+      if (byte === 0x20) {
+        out += '%20';
+      } else if ((byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a) || (byte >= 0x30 && byte <= 0x39)) {
+        out += String.fromCharCode(byte);
+      } else {
+        out += '%' + byte.toString(16).toUpperCase().padStart(2, '0');
       }
-      try { cb(null, JSON.parse(raw || '{}')); }
-      catch (e) { cb(null, {}); }
-    });
-  }
-  // ????????????? ?????????? ????????/?????????????.
-  function handleAuth(req, res, pathname) {
-    if (!auth) { sendJson(res, 500, { error: 'auth_disabled' }); return; }
-    var ip = req.socket.remoteAddress || 'unknown';
-    var token = getToken(req);
-    var session = auth.getSession(token);
-
-    if (pathname === '/api/auth/register' && req.method === 'POST') {
-      if (authRateLimited(ip)) { sendJson(res, 429, { error: '??????? ????? ???????. ?????????? ?????.' }); return; }
-      readJsonBody(req, function (err, body) {
-        console.error('[DEBUG register] body=', JSON.stringify(body), 'login=', body && body.login);
-        try {
-          var user = auth.registerUser(body.login, body.password);
-          var t = auth.createSession(user.id, user.login);
-          setSessionCookie(res, t);
-          sendJson(res, 200, { ok: true, user: { login: user.login } });
-        } catch (e) { sendJson(res, 400, { error: e.message }); }
-      });
-      return;
     }
-    if (pathname === '/api/auth/login' && req.method === 'POST') {
-      if (authRateLimited(ip)) { sendJson(res, 429, { error: '??????? ????? ???????. ?????????? ?????.' }); return; }
-      readJsonBody(req, function (err, body) {
-        var user = auth.verifyUser(body.login, body.password);
-        if (!user) { sendJson(res, 401, { error: '???????? ????? ??? ??????' }); return; }
-        var t = auth.createSession(user.id, user.login);
-        setSessionCookie(res, t);
-        sendJson(res, 200, { ok: true, user: { login: user.login } });
-      });
-      return;
-    }
-    if (pathname === '/api/auth/logout' && req.method === 'POST') {
-      auth.destroySession(token);
-      clearSessionCookie(res);
-      sendJson(res, 200, { ok: true });
-      return;
-    }
-    if (pathname === '/api/auth/me' && req.method === 'GET') {
-      if (!session) { sendJson(res, 200, { ok: true, user: null }); return; }
-      sendJson(res, 200, { ok: true, user: { login: session.login } });
-      return;
-    }
-    if (pathname === '/api/auth/account' && req.method === 'DELETE') {
-      if (!session) { sendJson(res, 401, { error: '?? ???????????' }); return; }
-      auth.deleteUser(session.userId);
-      clearSessionCookie(res);
-      sendJson(res, 200, { ok: true });
-      return;
-    }
-    if (pathname === '/api/sync' && req.method === 'GET') {
-      if (!session) { sendJson(res, 401, { error: '?? ???????????' }); return; }
-      sendJson(res, 200, { ok: true, blocks: auth.getBlocks(session.userId) });
-      return;
-    }
-    if (pathname === '/api/sync' && req.method === 'POST') {
-      if (!session) { sendJson(res, 401, { error: '?? ???????????' }); return; }
-      readJsonBody(req, function (err, body) {
-        var blocks = Array.isArray(body.blocks) ? body.blocks : [];
-        var valid = blocks.filter(function (b) { return b && typeof b.kind === 'string' && typeof b.payload === 'string'; });
-        var merged = auth.applyBlocks(session.userId, valid);
-        sendJson(res, 200, { ok: true, blocks: merged });
-      });
-      return;
-    }
-    sendJson(res, 404, { error: 'not_found' });
+    return out;
   }
 
-  // Proxy to BSEU schedule endpoint so the browser can fetch forms/courses/groups.
-  function handleProxy(req, res) {
-    var bodyChunks = [];
-    req.on('data', function (c) { bodyChunks.push(c); });
-    req.on('end', function () {
-      var payload;
+  function decodeResponseBuffer(buffer, response) {
+    const contentType = response.headers.get('content-type') || '';
+    const charsetMatch = contentType.match(/charset=([^\s;]+)/i);
+    let charset = charsetMatch ? charsetMatch[1].replace(/['"]/g, '').toLowerCase() : null;
+    
+    if (!charset) {
+      const utf8Text = buffer.toString('utf-8');
       try {
-        payload = JSON.parse(Buffer.concat(bodyChunks).toString('utf-8') || '{}');
+        JSON.parse(utf8Text);
+        charset = 'utf-8';
       } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'bad_json' }));
-        return;
+        if (utf8Text.includes('\uFFFD') || /[\x80-\xFF]/.test(utf8Text)) {
+          charset = 'windows-1251';
+        } else {
+          charset = 'utf-8';
+        }
       }
-      var targetUrl = payload.url || 'https://bseu.by/schedule/';
-      var postBody = payload.body || '';
-      // BSEU expects the request body encoded in windows-1251.
-      var postBuffer = iconv.encode(postBody, 'win1251');
-      fetch(targetUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=windows-1251',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        },
-        body: postBuffer
-      }).then(function (response) {
-        return response.arrayBuffer().then(function (buf) {
-          var buffer = Buffer.from(buf);
-          var decoded = decodeBuffer(buffer);
-          res.writeHead(response.status, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(decoded);
-        });
-      }).catch(function (err) {
-        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'proxy_failed', message: err.message }));
-      });
-    });
+    }
+    
+    return iconv.decode(buffer, charset);
   }
 
-  var server = http.createServer(function (req, res) {
-    var parsed = new URL(req.url, 'http://localhost');
-    var pathname = decodeURIComponent(parsed.pathname);
-
-    if (pathname === '/api/proxy' && req.method === 'POST') {
-      handleProxy(req, res);
-      return;
+  async function fetchBseuList(action, params = {}) {
+    const cacheKey = `list:${action}:${JSON.stringify(params)}`;
+    const cached = fileGetCache(cacheKey);
+    const now = Date.now();
+    const listTTL = 24 * 60 * 60 * 1000; // 24 hours
+    
+    if (cached && (now - cached.updatedAt < listTTL)) {
+      return cached.value;
     }
 
-    // --- ?????????? ?? ?????????? (API studhub.by) ---
-    // ?????? ?????????.
-    if (pathname === '/api/audiences' && req.method === 'GET') {
-      handleStudhubProxy('https://studhub.by/Schedule/3/audiences?', res);
-      return;
-    }
-    // ?????????? ?????????? ????????? ?? ????.
-    if (pathname === '/api/schedule' && req.method === 'GET') {
-      var q = parsed.searchParams;
-      var audience = (q.get('audience') || '').trim();
-      var date = (q.get('date') || '').trim();
-      if (!audience || !date) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'missing_params' }));
-        return;
+    const bodyParts = [`__act=${action}`];
+    for (let key in params) {
+      if (key === 'tname') {
+        bodyParts.push(`${key}=${toWin1251Url(params[key])}`);
+      } else {
+        bodyParts.push(`${key}=${params[key]}`);
       }
-      handleStudhubProxy(
-        'https://studhub.by/Schedule/3/audiences/' + encodeURIComponent(audience) + '/schedule/date/' + encodeURIComponent(date),
-        res
-      );
-      return;
     }
+    const bodyString = bodyParts.join("&");
 
-    // --- ???????? ? ????????????? (?????+??????, ??? email) ---
-    if (pathname.indexOf('/api/auth/') === 0 || pathname === '/api/sync') {
-      handleAuth(req, res, pathname);
-      return;
-    }
+    try {
+      const response = await fetch("https://bseu.by/schedule/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=windows-1251",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
+        body: iconv.encode(bodyString, 'win1251')
+      });
 
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const buffer = await response.arrayBuffer();
+      const decoded = decodeResponseBuffer(Buffer.from(buffer), response);
+       const data = JSON.parse(decoded);
+       fileSetCache(cacheKey, data);
+       return data;
+     } catch (error) {
+       console.error(`[BSEU List] Failed for ${action}:`, error);
+       if (cached) return cached.value;
+       throw error;
+     }
+   }
 
-    var file = pathname === '/' ? 'index.html' : pathname;
-    var filePath = path.join(__dirname, file.split('?')[0]);
-    fs.readFile(filePath, function (err, data) {
-      if (err) {
-        fs.readFile(path.join(__dirname, 'schedj.js'), function (e2, js) {
-          if (e2) {
-            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-            res.end('Not found');
-          } else {
-            res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-            res.end(js);
-          }
-        });
-        return;
+  function parseScheduleHtml(html) {
+    const $ = cheerio.load(html);
+    const table = $('table').first();
+    
+    let semesterStartDate = null;
+    let currentSemesterWeek = 1;
+    
+    const semesterMatch = html.match(/<!--(?:first|second)\s+semester=(.*?)-->/i);
+    if (semesterMatch) {
+      semesterStartDate = new Date(semesterMatch[1]);
+    } else {
+      const weekMatch = html.match(/Текущая\s+-\s+<strong>(\d+)<\/strong>\s+учебная\s+неделя/i);
+      if (weekMatch) {
+        const currentWeekNum = Number(weekMatch[1]);
+        currentSemesterWeek = currentWeekNum;
+        const today = new Date();
+        const day = today.getDay();
+        const diff = today.getDate() - day + (day === 0 ? -6 : 1);
+        const todayMonday = new Date(today.setDate(diff));
+        todayMonday.setHours(0, 0, 0, 0);
+        semesterStartDate = new Date(todayMonday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
+      } else {
+        semesterStartDate = new Date();
+        currentSemesterWeek = 1;
       }
-      var ext = path.extname(filePath).toLowerCase();
-      var types = {
-        '.html': 'text/html; charset=utf-8',
-        '.js': 'application/javascript; charset=utf-8',
-        '.css': 'text/css; charset=utf-8',
-        '.json': 'application/json; charset=utf-8',
-        '.png': 'image/png',
-        '.svg': 'image/svg+xml',
-        '.webmanifest': 'application/manifest+json'
-      };
-      res.writeHead(200, { 'Content-Type': types[ext] || 'application/octet-stream' });
-      res.end(data);
+    }
+    
+    if (!table.length) {
+      return { semesterStartDate, currentSemesterWeek, lessons: [] };
+    }
+    
+    const rows = table.find('tr');
+    let currentDay = '';
+    const lessons = [];
+    
+    const headers = [];
+    table.find('thead th').each((idx, th) => {
+      headers.push($(th).text().trim().toLowerCase());
     });
+    const isTeacherSchedule = headers.includes('группа');
+    
+    const rowArr = rows.toArray();
+    for (let i = 0; i < rowArr.length; i++) {
+      const row = $(rowArr[i]);
+      const wdayCell = row.find('td.wday');
+      if (wdayCell.length) {
+        currentDay = wdayCell.text().trim();
+        continue;
+      }
+      
+      const cells = row.find('td');
+      if (cells.length >= 3) {
+        if (isTeacherSchedule) {
+          if (cells.length >= 5) {
+            const time = $(cells[0]).text().trim();
+            const group = $(cells[1]).text().trim();
+            const subgroup = $(cells[2]).text().trim();
+            const contentCell = $(cells[3]);
+            const room = $(cells[4]).text().trim();
+            
+            const distypeSpan = contentCell.find('.distype');
+            const type = distypeSpan.length ? distypeSpan.text().replace(/[()]/g, '').trim() : '';
+            
+            const emEl = contentCell.find('em');
+            const subject = emEl.length ? emEl.text().trim() : '';
+            
+            let weeks = '';
+            const clone = contentCell.clone();
+            clone.find('.distype').remove();
+            clone.find('em').remove();
+            const rawText = clone.text().trim();
+            const match = rawText.match(/^\(([^)]+)\)/);
+            if (match) {
+              weeks = match[1];
+            } else {
+              weeks = rawText;
+            }
+            
+            const displayGroup = subgroup ? `${group} (${subgroup})` : group;
+            if (subject && time) {
+              lessons.push({
+                day: currentDay || "Вне сетки",
+                time,
+                weeks,
+                subject,
+                type,
+                teacher: displayGroup,
+                room,
+                isTeacher: true
+              });
+            }
+          }
+        } else {
+          const time = $(cells[0]).text().trim();
+          const weeks = $(cells[1]).text().trim();
+          let subject = '';
+          let type = '';
+          let teacher = '';
+          let room = '';
+          
+          const contentCell = row.find("td[colspan='2'], td[colspan='3']");
+          const rightCell = row.find('td.right, td.rght');
+          
+          if (contentCell.length) {
+            const distypeSpan = contentCell.find('.distype');
+            type = distypeSpan.length ? distypeSpan.text().replace(/[()]/g, '').trim() : '';
+            
+            const teacherSpan = contentCell.find('.teacher, .teacher.dd');
+            teacher = teacherSpan.length ? teacherSpan.text().trim() : '';
+            
+            const clone = contentCell.clone();
+            clone.find('.distype').remove();
+            clone.find('.teacher, .teacher.dd').remove();
+            subject = clone.text().replace(/,\s*$/, '').trim();
+          }
+          
+          if (rightCell.length) {
+            room = rightCell.text().trim();
+          } else if (subject) {
+            const subgroupRooms = [];
+            for (let j = i + 1; j < rowArr.length; j++) {
+              const subRow = $(rowArr[j]);
+              if (subRow.find('td.wday').length) break;
+              const subCells = subRow.find('td');
+              if (subCells.length >= 3 && !subRow.find('td.sg').length) break;
+              const lastCell = subCells.last();
+              if (lastCell.length) {
+                const r = lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim();
+                if (r && !subgroupRooms.includes(r)) subgroupRooms.push(r);
+              }
+            }
+            room = subgroupRooms.join(', ');
+          }
+          
+          if (subject && time) {
+            lessons.push({
+              day: currentDay || "Вне сетки",
+              time,
+              weeks,
+              subject,
+              type,
+              teacher,
+              room,
+              isTeacher: false
+            });
+          }
+        }
+      }
+    }
+    
+    const subjectGroups = {};
+    lessons.forEach(l => {
+      const subj = (l.subject || '').trim();
+      if (!subjectGroups[subj]) subjectGroups[subj] = [];
+      subjectGroups[subj].push(l);
+    });
+    
+    Object.values(subjectGroups).forEach(group => {
+      const dayOrder = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
+      group.sort((a, b) => {
+        const aDay = (a.day || '').toLowerCase().trim();
+        const bDay = (b.day || '').toLowerCase().trim();
+        const aDayIdx = dayOrder.indexOf(aDay);
+        const bDayIdx = dayOrder.indexOf(bDay);
+        if (aDayIdx !== bDayIdx) return aDayIdx - bDayIdx;
+        const aTime = a.time || '';
+        const bTime = b.time || '';
+        return aTime.localeCompare(bTime);
+      });
+      group.forEach((l, idx) => {
+        l._subjectOrderIndex = idx + 1;
+      });
+    });
+    
+    return {
+      semesterStartDate,
+      currentSemesterWeek,
+      lessons
+    };
+  }
+
+  async function getScheduleWithCache(cacheKey, bodyString) {
+    const cached = fileGetCache(cacheKey);
+    const now = Date.now();
+    const cacheTTL = 2 * 60 * 60 * 1000; // 2 hours
+    
+    if (cached && (now - cached.updatedAt < cacheTTL)) {
+      return { ...cached.value, isFallback: false };
+    }
+    
+    try {
+      const response = await fetch("https://bseu.by/schedule/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=windows-1251",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
+        body: iconv.encode(bodyString, 'win1251')
+      });
+      
+      if (!response.ok) throw new Error(`HTTP status ${response.status}`);
+      const buffer = await response.arrayBuffer();
+      const htmlText = decodeResponseBuffer(Buffer.from(buffer), response);
+      
+       const parsedData = parseScheduleHtml(htmlText);
+       fileSetCache(cacheKey, parsedData);
+       return { ...parsedData, isFallback: false };
+     } catch (error) {
+      console.error(`[BSEU Schedule] Failed for ${cacheKey}:`, error);
+      if (cached) {
+        return {
+          ...cached.value,
+          isFallback: true,
+          savedAt: cached.updatedAt
+        };
+      }
+      throw error;
+    }
+  }
+
+  app.get('/api/forms', async (req, res) => {
+    try {
+      const { faculty } = req.query;
+      const data = await fetchBseuList("__id.22.main.inpFldsA.GetForms", { faculty });
+      res.json(data);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
   });
-  server.listen(PORT, '0.0.0.0', function () {
-    console.log('Server is running at http://0.0.0.0:' + PORT);
+
+  app.get('/api/courses', async (req, res) => {
+    try {
+      const { faculty, form } = req.query;
+      const data = await fetchBseuList("__id.23.main.inpFldsA.GetCourse", { faculty, form });
+      res.json(data);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
   });
-  server.on('error', function (err) {
+
+  app.get('/api/groups', async (req, res) => {
+    try {
+      const { faculty, form, course } = req.query;
+      const data = await fetchBseuList("__id.23.main.inpFldsA.GetGroups", { faculty, form, course });
+      res.json(data);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/teachers', async (req, res) => {
+    try {
+      const { q } = req.query;
+      const data = await fetchBseuList("__id.24.main.TSchedA.getTeachers", { tname: q });
+      res.json(data);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ===== Unified schedule endpoint =====
+  // Принимает query-параметры:
+  //   - Расписание группы: faculty, form, course, group
+  //   - Расписание преподавателя: tid, taid, sid, tname
+  //   - Расписание аудитории: audience, date
+  // Старые пути /api/schedule/group и /api/schedule/teacher перенаправляются
+  // сюда же для обратной совместимости.
+  async function handleScheduleRequest(req, res) {
+    try {
+      const { faculty, form, course, group, tid, taid, sid, tname, audience, date } = req.query;
+
+      // Режим аудитории (агрегация по API BSEU)
+      if (audience && date) {
+        const schedule = await getAudienceScheduleBseu((audience || '').trim(), (date || '').trim());
+        return res.json(schedule);
+      }
+
+      // Режим преподавателя (источник bseu.by)
+      if (tid && taid && sid && tname) {
+        const body = `__act=tid.${tid.length}.${tid}taid.${taid.length}.${taid}sid.${sid.length}.${sid}__id.22.main.TSchedA.GetTSched__sp.8.tresults__fp.4.main&tname=${tname}&period=3`;
+        const cacheKey = `teacher:${tid}:${taid}:${sid}:${tname}`;
+        const schedule = await getScheduleWithCache(cacheKey, body);
+        return res.json(schedule);
+      }
+
+      // Режим группы (источник bseu.by)
+      if (faculty && form && course && group) {
+        const body = `__act=__id.25.main.inpFldsA.GetSchedule__sp.7.results__fp.4.main&faculty=${faculty}&form=${form}&course=${course}&group=${group}&period=3`;
+        const cacheKey = `group:${faculty}:${form}:${course}:${group}`;
+        const schedule = await getScheduleWithCache(cacheKey, body);
+        return res.json(schedule);
+      }
+
+      return res.status(400).json({ error: 'missing_params', received: req.query });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  app.get('/api/schedule', handleScheduleRequest);
+  // Обратная совместимость со старыми путями
+  app.get('/api/schedule/group', handleScheduleRequest);
+  app.get('/api/schedule/teacher', handleScheduleRequest);
+  app.get('/api/schedule/room', handleScheduleRequest);
+
+  // --- Список аудиторий для автодополнения (из полной копии расписания) ---
+  // Возвращаем полные строки аудиторий (например "2/301", "4/301"), как они
+  // хранятся в BSEU. Фильтрация по q идёт по нормализованным токенам
+  // (числам после слэша), чтобы ввод "301" находил "2/301" и "4/301".
+  app.get('/api/audiences', async (req, res) => {
+    try {
+      const q = (req.query.q || '').trim().toLowerCase();
+      const schedule = await ensureFullSchedule();
+      const map = new Map();
+      for (const p of (schedule || [])) {
+        const full = p.audience;
+        if (!full) continue;
+        // фильтруем по токенам, если задан q
+        if (q && !p.audienceTokens.some(t => t.includes(q))) continue;
+        map.set(full, (map.get(full) || 0) + 1);
+      }
+      const list = Array.from(map.entries())
+        .map(([audience, count]) => ({ audience, count }))
+        .sort((a, b) => {
+          const na = Number(a.audience.replace(/\D/g, '')) || 0;
+          const nb = Number(b.audience.replace(/\D/g, '')) || 0;
+          return na - nb || a.audience.localeCompare(b.audience);
+        });
+      res.json(list);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // --- Расписание аудитории на основе API BSEU ---
+  // ===== Полная копия всего расписания БГЭУ на сервере =====
+  // У BSEU нет прямого API по аудитории. Поэтому сервер периодически
+  // (каждые 10 минут) собирает расписания ВСЕХ групп всех факультетов в
+  // единую копию (fullScheduleCache). При запросе аудитории мы лишь
+  // фильтруем эту уже готовую копию — без обращения к BSEU в момент запроса.
+
+  const BSEU_FACULTIES = [
+    "12", "14", "13", "7", "2", "8", "534", "11", "263", "18",
+    "129", "450", "530", "531", "497", "535", "432"
+  ];
+  const FULL_SCHEDULE_INTERVAL = 10 * 60 * 1000; // 10 минут
+
+  // In-memory полная копия расписания: массив пар вида
+  // { audience, audienceTokens:[...], dates:[...], subject, type, teacher, groupText, startTime, endTime }
+  let fullScheduleCache = null;
+  let fullScheduleUpdatedAt = 0;
+  let fullScheduleBuilding = false;
+  let fullSchedulePromise = null;
+
+  // Кэш расписания по аудиториям: { "2/301": [{ subject, type, teacher, groupText, startTime, endTime, dates, audience, audienceTokens }, ...] }
+  let audienceScheduleCache = {};
+  let audienceScheduleUpdatedAt = 0;
+
+  // Получить все группы факультета (каскад форма -> курс -> группа)
+  async function getFacultyGroups(faculty) {
+    const forms = await fetchBseuList("__id.22.main.inpFldsA.GetForms", { faculty });
+    if (!Array.isArray(forms)) return [];
+    let groups = [];
+    for (const f of forms) {
+      const courses = await fetchBseuList("__id.23.main.inpFldsA.GetCourse", { faculty, form: f.value });
+      if (!Array.isArray(courses)) continue;
+      for (const c of courses) {
+        const gs = await fetchBseuList("__id.23.main.inpFldsA.GetGroups", { faculty, form: f.value, course: c.value });
+        if (!Array.isArray(gs)) continue;
+        for (const g of gs) {
+          groups.push({ faculty, form: f.value, course: c.value, group: g.value, groupText: g.text });
+        }
+      }
+    }
+    return groups;
+  }
+
+  // Дата конкретной пары от старта семестра (аналог getDateForLesson на клиенте)
+  function lessonDate(semesterStartDate, dayName, weekNum) {
+    if (!semesterStartDate || !weekNum) return null;
+    const daysOfWeekMap = {
+      'понедельник': 0, 'вторник': 1, 'среда': 2, 'четверг': 3,
+      'пятница': 4, 'суббота': 5, 'воскресенье': 6
+    };
+    const dayIndex = daysOfWeekMap[String(dayName || '').toLowerCase().trim()];
+    if (dayIndex === undefined) return null;
+    const start = new Date(semesterStartDate);
+    const monday = new Date(start);
+    const sd = monday.getDay();
+    monday.setDate(monday.getDate() - (sd === 0 ? 6 : sd - 1));
+    monday.setHours(0, 0, 0, 0);
+    const result = new Date(monday);
+    result.setDate(monday.getDate() + (weekNum - 1) * 7 + dayIndex);
+    const y = result.getFullYear();
+    const m = String(result.getMonth() + 1).padStart(2, '0');
+    const d = String(result.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function parseWeeks(weeksStr) {
+    if (!weeksStr) return [];
+    const clean = String(weeksStr).replace(/[()]/g, '').trim();
+    if (!clean) return [];
+    const result = [];
+    clean.split(',').forEach(part => {
+      if (part.includes('-')) {
+        const [s, e] = part.split('-').map(Number);
+        for (let i = s; i <= e; i++) result.push(i);
+      } else {
+        const n = Number(part);
+        if (!Number.isNaN(n)) result.push(n);
+      }
+    });
+    return result;
+  }
+
+  // Нормализация номера аудитории. BSEU хранит их как "2/301, 2/406"
+  // (корпус/номер), иногда просто "301". Извлекаем все числовые сегменты
+  // после слэша (либо сам номер), чтобы сравнивать с введённым.
+  function audienceTokens(room) {
+    if (!room) return [];
+    const tokens = [];
+    String(room).split(',').forEach(part => {
+      const p = part.trim();
+      const slashIdx = p.lastIndexOf('/');
+      const num = (slashIdx >= 0 ? p.slice(slashIdx + 1) : p).trim();
+      const m = num.match(/^\d+/);
+      if (m) tokens.push(m[0]);
+    });
+    return tokens;
+  }
+
+  // Собрать полную копию расписания всех групп всех факультетов.
+  // Возвращает массив пар, каждая с готовыми датами (strings) и токенами аудитории.
+  async function buildFullSchedule() {
+    if (fullScheduleBuilding) return fullSchedulePromise;
+    fullScheduleBuilding = true;
+    fullSchedulePromise = (async () => {
+      console.log('[FullSchedule] Начинаем сборку полной копии расписания...');
+      const t0 = Date.now();
+
+      // 1. Собрать все группы всех факультетов параллельно
+      let allGroups = [];
+      const groupLists = await Promise.all(BSEU_FACULTIES.map(fac =>
+        getFacultyGroups(fac).catch(e => {
+          console.warn(`[FullSchedule] Факультет ${fac}: ${e.message}`);
+          return [];
+        })
+      ));
+      groupLists.forEach(list => { allGroups = allGroups.concat(list); });
+
+      // 2. Загрузить расписания групп параллельно пачками и развернуть пары по датам
+      const CONCURRENCY = 30;
+      const all = [];
+      for (let i = 0; i < allGroups.length; i += CONCURRENCY) {
+        const batch = allGroups.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(batch.map(async (g) => {
+          try {
+            const body = `__act=__id.25.main.inpFldsA.GetSchedule__sp.7.results__fp.4.main&faculty=${g.faculty}&form=${g.form}&course=${g.course}&group=${g.group}&period=3`;
+            const gkey = `group:${g.faculty}:${g.form}:${g.course}:${g.group}`;
+            const sched = await getScheduleWithCache(gkey, body);
+            return { sched, g };
+          } catch (e) {
+            return null;
+          }
+        }));
+        for (const r of results) {
+          if (!r) continue;
+          const { sched, g } = r;
+          const lessons = sched.lessons || [];
+          const semStart = sched.semesterStartDate;
+          for (const l of lessons) {
+            const weeks = parseWeeks(l.weeks);
+            const dates = [];
+            for (const w of weeks) {
+              const d = lessonDate(semStart, l.day, w);
+              if (d) dates.push(d);
+            }
+            if (!dates.length) continue;
+            const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
+            const entry = {
+              audience: l.room,
+              audienceTokens: audienceTokens(l.room),
+              dates,
+              subject: l.subject,
+              type: l.type,
+              teacher: l.teacher || '',
+              groupText: g.groupText,
+              startTime: start || '',
+              endTime: end || ''
+            };
+            all.push(entry);
+            
+            // Заполняем кэш по аудиториям
+            if (l.room) {
+              if (!audienceScheduleCache[l.room]) {
+                audienceScheduleCache[l.room] = [];
+              }
+              audienceScheduleCache[l.room].push(entry);
+            }
+          }
+        }
+      }
+
+      fullScheduleCache = all;
+      fullScheduleUpdatedAt = Date.now();
+      audienceScheduleUpdatedAt = Date.now();
+      console.log(`[FullSchedule] Готово: ${all.length} пар, ${allGroups.length} групп, за ${((Date.now() - t0) / 1000).toFixed(1)} с`);
+      fullScheduleBuilding = false;
+      return all;
+    })();
+    return fullSchedulePromise;
+  }
+
+  // Гарантировать, что полная копия готова (запустить сборку при необходимости)
+  async function ensureFullSchedule() {
+    if (fullScheduleCache) return fullScheduleCache;
+    return buildFullSchedule();
+  }
+
+  // Фильтрация уже готовой копии по аудитории и дате (мгновенно)
+  async function getAudienceScheduleBseu(audience, date) {
+    const targetAud = audience.trim();
+    const schedule = await ensureFullSchedule();
+    if (!schedule) schedule = fullScheduleCache || [];
+
+    const collected = schedule.filter(p =>
+      (p.audience === targetAud || p.audienceTokens.includes(targetAud)) && p.dates.includes(date)
+    ).map(p => ({
+      shortNameRU: p.subject,
+      lessonTypeShortNameRU: p.type,
+      teachers: p.teacher ? [p.teacher] : [],
+      groups: [p.groupText],
+      audience: p.audience,
+      startTime: p.startTime,
+      endTime: p.endTime
+    }));
+
+    collected.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+
+    let dayNameRU = '';
+    try {
+      dayNameRU = new Date(date + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'long' });
+    } catch (e) { /* ignore */ }
+
+    const payload = [{
+      scheduleOnDays: [{
+        id: 0,
+        date: date + 'T00:00:00',
+        dayNameRU,
+        week: 0,
+        lessons: collected
+      }]
+    }];
+
+    return { data: payload, isFallback: false, fromCache: false, builtAt: fullScheduleUpdatedAt };
+  }
+
+  // Serve static files
+  app.use(express.static(__dirname));
+
+  // Fallback: serve index.html or schedj.js
+  app.use((req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+  });
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running at http://0.0.0.0:${PORT}`);
+    // Запускаем сборку полной копии расписания сразу и затем каждые 10 минут
+    buildFullSchedule().catch(e => console.error('[FullSchedule] Ошибка начальной сборки:', e.message));
+    setInterval(() => {
+      buildFullSchedule().catch(e => console.error('[FullSchedule] Ошибка периодической сборки:', e.message));
+    }, FULL_SCHEDULE_INTERVAL);
+  });
+
+  server.on('error', (err) => {
     console.error('Server failed to start:', err);
     process.exit(1);
   });

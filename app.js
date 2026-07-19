@@ -79,27 +79,32 @@ function formatCacheTime(ts) {
   return d.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
 }
 
+let cacheBannerTimer = null;
 function showCacheBanner(savedAt) {
-  let banner = document.getElementById("cache-banner");
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "cache-banner";
-    banner.className = "mb-4 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-900 px-4 py-3 flex items-center gap-3 text-amber-700 dark:text-amber-400 font-semibold text-sm";
-    const grid = document.querySelector(".grid.grid-cols-1.lg\\:grid-cols-12");
-    if (grid && grid.parentNode) {
-      grid.parentNode.insertBefore(banner, grid);
-    }
+  const modal = document.getElementById("server-offline-modal");
+  if (!modal) return;
+  const timeEl = modal.querySelector("#offline-modal-time");
+  if (timeEl) {
+    const timeStr = formatCacheTime(savedAt);
+    timeEl.textContent = timeStr ? `Обновлено: ${timeStr}` : "Показаны сохранённые данные.";
   }
-  const timeStr = formatCacheTime(savedAt);
-  banner.innerHTML = `
-    <span class="material-symbols-outlined text-2xl">cloud_off</span>
-    <span>Сервер расписания временно недоступен. Показаны последние сохранённые данные${timeStr ? ` (от ${escapeHtml(timeStr)})` : ""}.</span>`;
-  banner.classList.remove("hidden");
+  modal.classList.remove("hidden");
+  const card = modal.querySelector(".offline-modal-card");
+  requestAnimationFrame(() => {
+    card.classList.remove("translate-y-[-12px]", "opacity-0");
+    card.classList.add("translate-y-0", "opacity-100");
+  });
+  if (cacheBannerTimer) clearTimeout(cacheBannerTimer);
+  cacheBannerTimer = setTimeout(hideCacheBanner, 5000);
 }
 
 function hideCacheBanner() {
-  const banner = document.getElementById("cache-banner");
-  if (banner) banner.classList.add("hidden");
+  const modal = document.getElementById("server-offline-modal");
+  if (!modal) return;
+  const card = modal.querySelector(".offline-modal-card");
+  card.classList.remove("translate-y-0", "opacity-100");
+  card.classList.add("translate-y-[-12px]", "opacity-0");
+  setTimeout(() => modal.classList.add("hidden"), 300);
 }
 
 // ===== Хранилище домашних заданий =====
@@ -530,6 +535,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const navEditGroup = document.getElementById("nav-edit-group");
   const navDefaultGroup = document.getElementById("nav-default-group");
   const firstTimeModal = document.getElementById("first-time-modal");
+  const modalTitle = document.getElementById("modal-title");
   const modalFaculty = document.getElementById("modal-faculty");
   const modalForm = document.getElementById("modal-form");
   const modalCourse = document.getElementById("modal-course");
@@ -539,9 +545,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // Инициализация темной темы
   initTheme();
   
-  // Заполнение факультетов
-  populateFacultySelect(facultySelect);
-  attachAbbrevSelect(facultySelect);
+   // Заполнение факультетов
+   populateFacultySelect(facultySelect);
+   attachAbbrevSelect(facultySelect);
   attachAbbrevSelect(groupSelect);
   attachAbbrevSelect(modalFaculty);
   attachAbbrevSelect(modalGroup);
@@ -762,6 +768,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Кнопка закрытия стилизованного уведомления о кэше
+  const offlineModalDismiss = document.getElementById("offline-modal-dismiss");
+  const serverOfflineModal = document.getElementById("server-offline-modal");
+  if (offlineModalDismiss) {
+    offlineModalDismiss.addEventListener("click", hideCacheBanner);
+  }
+
   // Каскадные выпадающие списки
   facultySelect.addEventListener("change", async () => {
     resetSelect(formSelect, "Загрузка форм...");
@@ -878,11 +891,13 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   roomInput.addEventListener('input', () => {
-    filterAudiences();
+    clearTimeout(roomAudiencesTimer);
+    roomAudiencesTimer = setTimeout(filterAudiences, 250);
   });
 
   roomInput.addEventListener('focus', () => {
-    filterAudiences();
+    clearTimeout(roomAudiencesTimer);
+    roomAudiencesTimer = setTimeout(filterAudiences, 250);
   });
 
   roomInput.addEventListener('keydown', event => {
@@ -917,45 +932,31 @@ document.addEventListener("DOMContentLoaded", () => {
     getSchedule();
   });
 
-  // Метод перекодирования в Windows-1251
-  function toWin1251Url(str) {
-    const charMap = {
-      'А': '%C0', 'Б': '%C1', 'В': '%C2', 'Г': '%C3', 'Д': '%C4', 'Е': '%C5', 'Ж': '%C6', 'З': '%C7', 'И': '%C8', 'Й': '%C9',
-      'К': '%CA', 'Л': '%CB', 'М': '%CC', 'Н': '%CD', 'О': '%CE', 'П': '%CF', 'Р': '%D0', 'С': '%D1', 'Т': '%D2', 'У': '%D3',
-      'Ф': '%D4', 'Х': '%D5', 'Ц': '%D6', 'Ч': '%D7', 'Ш': '%D8', 'Щ': '%D9', 'Ъ': '%DA', 'Ы': '%DB', 'Ь': '%DC', 'Э': '%DD',
-      'Ю': '%DE', 'Я': '%DF',
-      'а': '%E0', 'б': '%E1', 'в': '%E2', 'г': '%E3', 'д': '%E4', 'е': '%E5', 'ж': '%E6', 'з': '%E7', 'и': '%E8', 'й': '%E9',
-      'к': '%EA', 'л': '%EB', 'м': '%EC', 'н': '%ED', 'о': '%EE', 'п': '%EF', 'р': '%F0', 'с': '%F1', 'т': '%F2', 'у': '%F3',
-      'ф': '%F4', 'х': '%F5', 'ц': '%F6', 'ч': '%F7', 'ш': '%F8', 'щ': '%F9', 'ъ': '%FA', 'ы': '%FB', 'ь': '%FC', 'э': '%FD',
-      'ю': '%FE', 'я': '%FF', 'ё': '%B8', 'Ё': '%A8', ' ': '%20'
-    };
-    return str.split('').map(c => charMap[c] || encodeURIComponent(c)).join('');
-  }
-
-  // Общий вызов API
-  async function apiRequest(action, params) {
-    const isApp = window.location.protocol === "file:" || window.location.protocol === "capacitor:" || window.Capacitor;
+  // Общий вызов API к нашему чистому бэкенду
+  async function apiRequest(action, params = {}) {
+    let url = "";
+    const cleanParams = { ...params };
     
-    // Формируем тело запроса
-    const bodyParts = [`__act=${action}`];
-    for (let key in params) {
-      if (key === 'tname') {
-        bodyParts.push(`${key}=${toWin1251Url(params[key])}`);
-      } else {
-        bodyParts.push(`${key}=${params[key]}`);
+    if (action.includes("GetForms")) {
+      url = "/api/forms";
+    } else if (action.includes("GetCourse")) {
+      url = "/api/courses";
+    } else if (action.includes("GetGroups")) {
+      url = "/api/groups";
+    } else if (action.includes("getTeachers")) {
+      url = "/api/teachers";
+      if (cleanParams.tname) {
+        cleanParams.q = cleanParams.tname;
+        delete cleanParams.tname;
       }
+    } else {
+      throw new Error("Unknown action: " + action);
     }
-    const bodyString = bodyParts.join("&");
-
-    const fetchUrl = isApp ? "https://bseu.by/schedule/" : "/api/proxy";
-    const fetchBody = isApp ? bodyString : JSON.stringify({ url: "https://bseu.by/schedule/", body: bodyString });
-    const fetchHeaders = isApp ? { "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" } : { "Content-Type": "application/json" };
-
-    const response = await fetch(fetchUrl, { method: "POST", headers: fetchHeaders, body: fetchBody });
+    
+    const query = new URLSearchParams(cleanParams).toString();
+    const response = await fetch(`${url}?${query}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-    const text = isApp ? new TextDecoder("utf-8").decode(await response.arrayBuffer()) : await response.text();
-    return JSON.parse(text);
+    return response.json();
   }
 
   function todayISO() {
@@ -1162,7 +1163,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    scheduleContainer.innerHTML = days.map(day => {
+    const html = days.map(day => {
       const lessons = Array.isArray(day.lessons) ? day.lessons : [];
       const lessonsHtml = lessons.length ? lessons.map(lesson => {
         const subject = lesson.shortNameRU || lesson.fullNameRU || lesson.subject || 'Без названия';
@@ -1220,6 +1221,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="cards-container space-y-4">${lessonsHtml}</div>
         </div>`;
     }).join('');
+    scheduleContainer.innerHTML = html;
   }
 
   const timePopover = document.getElementById("time-popover");
@@ -1518,10 +1520,20 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    list.slice(0, 30).forEach(aud => {
+    list.slice(0, 30).forEach(item => {
+      const aud = typeof item === 'string' ? item : item.audience;
+      const count = typeof item === 'object' && item.count ? item.count : null;
       const div = document.createElement('div');
-      div.className = 'autocomplete-suggestion font-semibold text-on-surface dark:text-slate-200';
-      div.textContent = aud;
+      div.className = 'autocomplete-suggestion font-semibold text-on-surface dark:text-slate-200 flex items-center justify-between gap-2';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = aud;
+      div.appendChild(nameSpan);
+      if (count) {
+        const badge = document.createElement('span');
+        badge.className = 'text-[10px] font-bold text-primary/60 dark:text-[#b5bcff]/60 bg-primary/10 dark:bg-[#b5bcff]/10 rounded-full px-2 py-0.5';
+        badge.textContent = count;
+        div.appendChild(badge);
+      }
       const selectAudience = () => {
         roomInput.value = aud;
         closeRoomDropdown();
@@ -1648,26 +1660,70 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function loadAudiences() {
-    if (allAudiences.length) return;
+  let roomAudiencesTimer = null;
+  // Нормализуем ответ сервера к массиву строк "корпус/аудитория".
+  // Поддерживаем оба формата бэкенда:
+  //   - server.js (studhub) отдаёт плоский массив строк ["2/301", ...]
+  //   - schedj.js отдаёт массив объектов [{audience, count}, ...]
+  function normalizeAudienceList(data) {
+    if (!Array.isArray(data)) return [];
+    return data
+      .map(x => (typeof x === 'string' ? x : (x && x.audience) ? x.audience : null))
+      .filter(Boolean)
+      .map(String);
+  }
+
+  // Сервер может не фильтровать по подстроке (studhub отдаёт все сразу),
+  // поэтому отбираем совпадения на клиенте по введённому запросу.
+  async function fetchAudiences(q) {
     try {
-      const response = await fetch('/api/audiences', { cache: 'no-store' });
+      const response = await fetch(`/api/audiences?q=${encodeURIComponent(q || '')}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      allAudiences = normalizeAudienceList(data);
-      setRoomDate(roomDateInput.value || todayISO());
+      const all = normalizeAudienceList(data);
+      const query = (q || '').trim().toLowerCase();
+      if (!query) return sortAudiences(all);
+      return sortAudiences(all.filter(a => a.toLowerCase().includes(query)));
     } catch (err) {
       console.warn('Не удалось загрузить список аудиторий:', err);
+      return [];
     }
   }
 
-  function filterAudiences() {
-    const value = roomInput.value.trim().toLowerCase();
+  // Сортируем аудитории по корпусу, затем по номеру внутри корпуса,
+  // чтобы предлагать настоящие номера в понятном порядке.
+  function sortAudiences(list) {
+    return [...list].sort((a, b) => {
+      const pa = parseAudience(a), pb = parseAudience(b);
+      if (pa.building !== pb.building) return pa.building - pb.building;
+      return pa.num - pb.num || a.localeCompare(b);
+    });
+  }
+
+  function parseAudience(a) {
+    const m = a.split('/');
+    const building = Number(m[0]) || 0;
+    const numMatch = (m[1] || '').match(/^\d+/);
+    const num = numMatch ? Number(numMatch[0]) : 0;
+    return { building, num };
+  }
+
+  async function loadAudiences() {
+    // При открытии режима аудитории подгружаем все варианты (для возможности
+    // быстрого выбора без ввода).
+    const list = await fetchAudiences('');
+    allAudiences = list;
+    setRoomDate(roomDateInput.value || todayISO());
+  }
+
+  async function filterAudiences() {
+    const value = roomInput.value.trim();
     if (!value) {
       renderRoomDropdown(allAudiences);
       return;
     }
-    renderRoomDropdown(allAudiences.filter(a => String(a).toLowerCase().includes(value)));
+    const list = await fetchAudiences(value);
+    renderRoomDropdown(list);
   }
 
   function renderRoomPrompt(message) {
@@ -1702,7 +1758,19 @@ document.addEventListener("DOMContentLoaded", () => {
     let queryTitle = "";
 
     if (isGroupTab) {
-      if (groupSelect.value === "-1") {
+      if (facultySelect.value === "-1" || !facultySelect.value) {
+        showError("Пожалуйста, выберите факультет.");
+        return;
+      }
+      if (formSelect.value === "-1" || !formSelect.value) {
+        showError("Пожалуйста, выберите форму обучения.");
+        return;
+      }
+      if (courseSelect.value === "-1" || !courseSelect.value) {
+        showError("Пожалуйста, выберите курс.");
+        return;
+      }
+      if (groupSelect.value === "-1" || !groupSelect.value) {
         showError("Пожалуйста, выберите группу.");
         return;
       }
@@ -1742,7 +1810,8 @@ document.addEventListener("DOMContentLoaded", () => {
       };
     } else if (isRoomTab) {
       const audience = roomInput.value.trim();
-      const date = roomDateInput.value || todayISO();
+      let date = roomDateInput.value || todayISO();
+      if (!date) date = todayISO();
       if (!audience) {
         showError("Пожалуйста, введите номер аудитории.");
         return;
@@ -1759,12 +1828,18 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const response = await fetch(`/api/schedule?audience=${encodeURIComponent(audience)}&date=${encodeURIComponent(date)}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        renderRoomSchedule(data, audience, date, shouldScroll);
-        saveScheduleCache("room", { audience, date }, data);
+        const json = await response.json();
+        // Бэкенд возвращает { data: [...], isFallback: bool, savedAt? }
+        const payload = json.data ?? json;
+        renderRoomSchedule(payload, audience, date, shouldScroll);
+        saveScheduleCache("room", { audience, date }, payload);
         dayStripContainer.classList.add('hidden');
         scheduleToolbar.classList.add('hidden');
-        hideCacheBanner();
+        if (json.isFallback) {
+          showCacheBanner(json.savedAt);
+        } else {
+          hideCacheBanner();
+        }
         localStorage.setItem("bseu_saved_state", JSON.stringify(saveState));
       } catch (e) {
         // Сервер недоступен — пытаемся показать кэш
@@ -1795,34 +1870,52 @@ document.addEventListener("DOMContentLoaded", () => {
     localStorage.setItem("bseu_saved_state", JSON.stringify(saveState));
 
     try {
-      const isApp = window.location.protocol === "file:" || window.location.protocol === "capacitor:" || window.Capacitor;
-      
-      // Формируем параметры
-      const bodyParts = [];
-      for (let key in bodyParams) {
-        if (key === 'tname') {
-          bodyParts.push(`${key}=${toWin1251Url(bodyParams[key])}`);
-        } else {
-          bodyParts.push(`${key}=${bodyParams[key]}`);
+      let fetchUrl = "";
+      if (saveState.tab === "group") {
+        fetchUrl = `/api/schedule?faculty=${encodeURIComponent(saveState.faculty)}&form=${encodeURIComponent(saveState.form)}&course=${encodeURIComponent(saveState.course)}&group=${encodeURIComponent(saveState.group)}`;
+      } else if (saveState.tab === "teacher") {
+        const { tid, taid, sid, tname } = saveState.teacher;
+        fetchUrl = `/api/schedule?tid=${encodeURIComponent(tid)}&taid=${encodeURIComponent(taid)}&sid=${encodeURIComponent(sid)}&tname=${encodeURIComponent(tname)}`;
+      }
+
+      const response = await fetch(fetchUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+
+      window.semesterStartDate = data.semesterStartDate ? new Date(data.semesterStartDate) : new Date();
+      window.currentSemesterWeek = data.currentSemesterWeek || 1;
+      window.cachedLessons = data.lessons || [];
+
+      // Сохраняем в кэш
+      saveScheduleCache(saveState.tab, saveState, data);
+
+      if (data.isFallback) {
+        showCacheBanner(data.savedAt);
+      } else {
+        hideCacheBanner();
+      }
+
+      if (saveState.tab === "group" && isDefaultGroupActive) {
+        localStorage.setItem("bseu_primary_group_lessons", JSON.stringify(data.lessons));
+        if (window.semesterStartDate) {
+          localStorage.setItem("bseu_semester_start_date", window.semesterStartDate.toISOString());
+        }
+        if (typeof updateIntersectionAlerts === "function") {
+          updateIntersectionAlerts();
         }
       }
-      const bodyString = bodyParts.join("&");
 
-      const fetchUrl = isApp ? "https://bseu.by/schedule/" : "/api/proxy";
-      const fetchBody = isApp ? bodyString : JSON.stringify({ url: "https://bseu.by/schedule/", body: bodyString });
-      const fetchHeaders = isApp ? { "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" } : { "Content-Type": "application/json" };
-
-      const response = await fetch(fetchUrl, { method: "POST", headers: fetchHeaders, body: fetchBody });
-      const htmlText = isApp ? new TextDecoder("windows-1251").decode(await response.arrayBuffer()) : await response.text();
-
-      parseAndRenderSchedule(htmlText, shouldScroll);
-      saveScheduleCache(saveState.tab, saveState, { html: htmlText });
-      hideCacheBanner();
+      renderCurrentMode(shouldScroll);
     } catch (e) {
-      // Сервер недоступен — пытаемся показать кэш
+      // Сервер недоступен — пытаемся показать клиентский кэш (localStorage)
       const cached = loadScheduleCache(saveState.tab, saveState);
-      if (cached && cached.payload && cached.payload.html) {
-        parseAndRenderSchedule(cached.payload.html, shouldScroll);
+      if (cached && cached.payload) {
+        const data = cached.payload;
+        window.semesterStartDate = data.semesterStartDate ? new Date(data.semesterStartDate) : new Date();
+        window.currentSemesterWeek = data.currentSemesterWeek || 1;
+        window.cachedLessons = data.lessons || [];
+
+        renderCurrentMode(shouldScroll);
         showCacheBanner(cached.savedAt);
       } else {
         showError("Не удалось получить расписание: " + e.message);
@@ -2005,10 +2098,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${l.type}</span>` : "";
     const weeksBadge = (l.weeks && showWeeks) ? `<span class="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-bold px-2 py-1 rounded">Недели: ${l.weeks}</span>` : "";
 
-    // Домашнее задание для этой пары (если есть)
+    // Домашнее задание для этой пары (если есть) - только в режиме группы по умолчанию
     const hwText = getHomeworkForLesson(l);
+    const showHomeworkControls = isGroupModeActive() && isDefaultGroupActive;
     const hwHtml = hwText
-      ? `<div class="homework-block mt-3 pt-3 border-t border-outline-variant/20 dark:border-slate-700/50 flex items-start gap-2">
+      ? showHomeworkControls ? `<div class="homework-block mt-3 pt-3 border-t border-outline-variant/20 dark:border-slate-700/50 flex items-start gap-2">
           <span class="material-symbols-outlined text-sm shrink-0 mt-0.5 text-amber-600 dark:text-amber-400">assignment</span>
           <div class="flex-1 min-w-0">
             <span class="text-xs font-semibold text-amber-700 dark:text-amber-300 block leading-relaxed break-words">${escapeHtml(hwText)}</span>
@@ -2016,23 +2110,28 @@ document.addEventListener("DOMContentLoaded", () => {
           <button type="button" class="hw-edit-btn shrink-0 mt-0.5 p-0.5 rounded-lg text-on-surface-variant/50 hover:text-primary dark:hover:text-[#b5bcff] transition-colors cursor-pointer" title="Редактировать ДЗ">
             <span class="material-symbols-outlined text-sm">edit</span>
           </button>
+        </div>` : `<div class="homework-block mt-3 pt-3 border-t border-outline-variant/20 dark:border-slate-700/50 flex items-start gap-2">
+          <span class="material-symbols-outlined text-sm shrink-0 mt-0.5 text-amber-600 dark:text-amber-400">assignment</span>
+          <div class="flex-1 min-w-0">
+            <span class="text-xs font-semibold text-amber-700 dark:text-amber-300 block leading-relaxed break-words">${escapeHtml(hwText)}</span>
+          </div>
         </div>`
-      : `<button type="button" class="hw-add-btn mt-2 text-[11px] font-semibold text-primary/70 dark:text-[#b5bcff]/70 hover:text-primary dark:hover:text-[#b5bcff] transition-colors flex items-center gap-1 cursor-pointer border border-dashed border-primary/20 dark:border-[#b5bcff]/20 rounded-lg px-2 py-1 hover:border-primary/40 dark:hover:border-[#b5bcff]/40">
+      : showHomeworkControls ? `<button type="button" class="hw-add-btn mt-2 text-[11px] font-semibold text-primary/70 dark:text-[#b5bcff]/70 hover:text-primary dark:hover:text-[#b5bcff] transition-colors flex items-center gap-1 cursor-pointer border border-dashed border-primary/20 dark:border-[#b5bcff]/20 rounded-lg px-2 py-1 hover:border-primary/40 dark:hover:border-[#b5bcff]/40">
           <span class="material-symbols-outlined text-sm">add_task</span>
           <span>Добавить ДЗ</span>
-        </button>`;
+        </button>` : '';
 
     card.innerHTML = `
       <div class="absolute top-0 left-0 w-1 h-full ${styles.border}"></div>
       <div class="flex items-start justify-between">
         <div class="flex gap-6 w-full">
-          <div class="flex flex-col items-center min-w-[64px]">
+          <div class="flex flex-col items-center min-w-[64px] lesson-time-col">
             <span class="text-lg font-extrabold text-on-surface dark:text-white">${startTime}</span>
             <div class="w-[2px] h-8 bg-surface-container-highest dark:bg-slate-800 my-1"></div>
             <span class="text-xs font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
           </div>
           <div class="flex-grow">
-            <div class="flex flex-wrap items-center gap-2 mb-2">
+            <div class="flex flex-wrap items-center gap-2 mb-2 lesson-meta-row">
               ${typeBadge}
               <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
                 <span class="material-symbols-outlined text-base">location_on</span>
@@ -2085,6 +2184,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let homeworkCurrentShowWeeks = false;
 
   function openHomeworkModal(lesson, showWeeks) {
+    // Разрешаем открытие модального окна ДЗ только в режиме группы по умолчанию
+    if (!isGroupModeActive() || !isDefaultGroupActive) return;
+    
     homeworkCurrentLesson = lesson;
     homeworkCurrentShowWeeks = showWeeks;
     const currentHw = getHomeworkForLesson(lesson);
@@ -2129,7 +2231,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function saveHomeworkFromModal() {
-    if (!homeworkCurrentLesson) return;
+    if (!homeworkCurrentLesson || !isGroupModeActive() || !isDefaultGroupActive) return;
     const lesson = homeworkCurrentLesson;
     const showWeeks = homeworkCurrentShowWeeks;
     setHomeworkForLesson(lesson, homeworkTextInput.value);
@@ -2146,7 +2248,7 @@ document.addEventListener("DOMContentLoaded", () => {
   homeworkCancelBtn.addEventListener("click", closeHomeworkModal);
   homeworkCloseBtn.addEventListener("click", closeHomeworkModal);
   homeworkDeleteBtn.addEventListener("click", () => {
-    if (!homeworkCurrentLesson) return;
+    if (!homeworkCurrentLesson || !isGroupModeActive() || !isDefaultGroupActive) return;
     const lesson = homeworkCurrentLesson;
     const showWeeks = homeworkCurrentShowWeeks;
     setHomeworkForLesson(lesson, "");
@@ -2236,202 +2338,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Парсинг расписания
-  function parseAndRenderSchedule(html, shouldScroll = true) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, "text/html");
-    const table = doc.querySelector("table");
-    
-    // Извлекаем дату начала семестра из комментария или оцениваем её
-    const semesterMatch = html.match(/<!--(?:first|second)\s+semester=(.*?)-->/i);
-    if (semesterMatch) {
-      window.semesterStartDate = new Date(semesterMatch[1]);
-    } else {
-      const weekMatch = html.match(/Текущая\s+-\s+<strong>(\d+)<\/strong>\s+учебная\s+неделя/i);
-      if (weekMatch) {
-        const currentWeekNum = Number(weekMatch[1]);
-        window.currentSemesterWeek = currentWeekNum;
-        const today = new Date();
-        const todayMonday = getMonday(today);
-        window.semesterStartDate = new Date(todayMonday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
-      } else {
-        window.semesterStartDate = new Date();
-        window.currentSemesterWeek = 1;
-      }
-    }
 
-    if (!table) {
-      window.cachedLessons = [];
-      const targetDate = window.selectedDateISO || todayISO();
-      renderDayStrip(targetDate);
-      selectDayOnStrip(targetDate);
-      return;
-    }
-
-    const rows = table.querySelectorAll("tr");
-    let currentDay = "";
-    let lessons = [];
-
-    // Определяем тип расписания (группа или препод) по колонкам шапки
-    const headers = Array.from(table.querySelectorAll("thead th")).map(th => th.textContent.trim().toLowerCase());
-    const isTeacherSchedule = headers.includes("группа");
-
-    const rowArr = Array.from(rows);
-    for (let i = 0; i < rowArr.length; i++) {
-      const row = rowArr[i];
-      const wdayCell = row.querySelector("td.wday");
-      if (wdayCell) {
-        currentDay = wdayCell.textContent.trim();
-        continue;
-      }
-
-      const cells = row.querySelectorAll("td");
-      if (cells.length >= 3) {
-        if (isTeacherSchedule) {
-          // Расписание преподавателя: Время (0), Группа (1), Подгруппа (2), Дисциплина (3), Аудитория (4)
-          if (cells.length >= 5) {
-            const time = cells[0].textContent.trim();
-            const group = cells[1].textContent.trim();
-            const subgroup = cells[2].textContent.trim();
-            const contentCell = cells[3];
-            const room = cells[4].textContent.trim();
-
-            const distypeSpan = contentCell.querySelector(".distype");
-            const type = distypeSpan ? distypeSpan.textContent.replace(/[()]/g, "").trim() : "";
-
-            const emEl = contentCell.querySelector("em");
-            const subject = emEl ? emEl.textContent.trim() : "";
-
-            let weeks = "";
-            let clone = contentCell.cloneNode(true);
-            const distypeEl = clone.querySelector(".distype");
-            if (distypeEl) distypeEl.remove();
-            const emElClone = clone.querySelector("em");
-            if (emElClone) emElClone.remove();
-            
-            const rawText = clone.textContent.trim();
-            const match = rawText.match(/^\(([^)]+)\)/);
-            if (match) {
-              weeks = match[1];
-            } else {
-              weeks = rawText;
-            }
-
-            const displayGroup = subgroup ? `${group} (${subgroup})` : group;
-
-            if (subject && time) {
-              lessons.push({
-                day: currentDay || "Вне сетки",
-                time,
-                weeks,
-                subject,
-                type,
-                teacher: displayGroup, // группа вместо препода
-                room,
-                isTeacher: true
-              });
-            }
-          }
-        } else {
-          // Расписание группы
-          const time = cells[0].textContent.trim();
-          const weeks = cells[1].textContent.trim();
-          let subject = "";
-          let type = "";
-          let teacher = "";
-          let room = "";
-
-          const contentCell = row.querySelector("td[colspan='2'], td[colspan='3']");
-          const rightCell = row.querySelector("td.right, td.rght");
-
-          if (contentCell) {
-            const distypeSpan = contentCell.querySelector(".distype");
-            type = distypeSpan ? distypeSpan.textContent.replace(/[()]/g, "").trim() : "";
-            const teacherSpan = contentCell.querySelector(".teacher, .teacher.dd");
-            teacher = teacherSpan ? teacherSpan.textContent.trim() : "";
-
-            let clone = contentCell.cloneNode(true);
-            const tEl = clone.querySelector(".distype");
-            if (tEl) tEl.remove();
-            const teachEl = clone.querySelector(".teacher, .teacher.dd");
-            if (teachEl) teachEl.remove();
-            subject = clone.textContent.replace(/,\s*$/, "").trim();
-          }
-
-          // Аудитория: если в строке-заголовке есть явная ячейка .right/.rght —
-          // берём её. Иначе (например, «Иностранный язык» с подгруппами) аудитории
-          // лежат в дочерних строках подгрупп — собираем их оттуда.
-          if (rightCell) {
-            room = rightCell.textContent.trim();
-          } else if (subject) {
-            const subgroupRooms = [];
-            for (let j = i + 1; j < rowArr.length; j++) {
-              const subRow = rowArr[j];
-              if (subRow.querySelector("td.wday")) break;
-              // Строка новой пары (со своим временем) — выходим из блока подгрупп
-              const subCells = subRow.querySelectorAll("td");
-              if (subCells.length >= 3 && !subRow.querySelector("td.sg")) break;
-              const lastCell = subCells[subCells.length - 1];
-              if (lastCell) {
-                const r = lastCell.textContent.replace(/<!--[\s\S]*?-->/g, "").trim();
-                if (r && !subgroupRooms.includes(r)) subgroupRooms.push(r);
-              }
-            }
-            room = subgroupRooms.join(", ");
-          }
-
-          if (subject && time) {
-            lessons.push({ day: currentDay || "Вне сетки", time, weeks, subject, type, teacher, room, isTeacher: false });
-          }
-        }
-      }
-    }
-
-    // Присваиваем каждой паре порядковый номер в рамках её предмета во всём семестре,
-    // отсортировав по дню недели + времени.
-    // Например, первая Математика в семестре → _subjectOrderIndex = 1,
-    // вторая Математика в семестре → _subjectOrderIndex = 2 и т.д.
-    // При переносе пары на другой день/время её номер в рамках предмета сохранится,
-    // и ДЗ переедет вместе с парой.
-    const subjectGroups = {};
-    lessons.forEach(l => {
-      const subject = (l.subject || "").trim();
-      if (!subjectGroups[subject]) subjectGroups[subject] = [];
-      subjectGroups[subject].push(l);
-    });
-    Object.values(subjectGroups).forEach(group => {
-      // Сортируем по дню недели (порядок дней) + времени
-      const dayOrder = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
-      group.sort((a, b) => {
-        const aDay = (a.day || "").toLowerCase().trim();
-        const bDay = (b.day || "").toLowerCase().trim();
-        const aDayIdx = dayOrder.indexOf(aDay);
-        const bDayIdx = dayOrder.indexOf(bDay);
-        if (aDayIdx !== bDayIdx) return aDayIdx - bDayIdx;
-        const aTime = a.time || "";
-        const bTime = b.time || "";
-        return aTime.localeCompare(bTime);
-      });
-      group.forEach((l, idx) => {
-        l._subjectOrderIndex = idx + 1;
-      });
-    });
-
-    window.cachedLessons = lessons;
-    
-    // Кэшируем расписание по умолчанию
-    const isGroupTab = document.getElementById("tab-group").classList.contains("segment-btn-active");
-    if (isGroupTab && isDefaultGroupActive) {
-      localStorage.setItem("bseu_primary_group_lessons", JSON.stringify(lessons));
-      if (window.semesterStartDate) {
-        localStorage.setItem("bseu_semester_start_date", window.semesterStartDate.toISOString());
-      }
-      if (typeof updateIntersectionAlerts === "function") {
-        updateIntersectionAlerts();
-      }
-    }
-
-    renderCurrentMode(shouldScroll);
-  }
 
   // Применяет текущий режим отображения (по дням / на семестр / экзамены)
   // к уже загруженным window.cachedLessons. Используется и после парсинга,
@@ -5015,6 +4922,8 @@ if (installBtn) {
   const menuCreate = document.getElementById('account-menu-create');
   const menuLogout = document.getElementById('account-menu-logout');
   const menuDelete = document.getElementById('account-menu-delete');
+  const menuTheme = document.getElementById('account-menu-theme');
+  const menuEditGroup = document.getElementById('account-menu-edit-group');
 
   const accountModal = document.getElementById('account-modal');
   const accountForm = document.getElementById('account-form');
@@ -5339,6 +5248,53 @@ if (installBtn) {
   });
 
   if (menuCreate) menuCreate.addEventListener('click', () => { hideMenu(); openAccountModal(false); });
+  if (menuTheme) menuTheme.addEventListener('click', () => {
+    hideMenu();
+    if (document.documentElement.classList.contains("dark")) {
+      document.documentElement.classList.remove("dark");
+      document.documentElement.classList.add("light");
+      themeToggleIcon.textContent = "dark_mode";
+      localStorage.setItem("theme", "light");
+    } else {
+      document.documentElement.classList.add("dark");
+      document.documentElement.classList.remove("light");
+      themeToggleIcon.textContent = "light_mode";
+      localStorage.setItem("theme", "dark");
+    }
+  });
+  if (menuEditGroup) menuEditGroup.addEventListener('click', async () => {
+    hideMenu();
+    isEditingGroup = true;
+    const primaryGroupStr = localStorage.getItem("bseu_primary_group");
+    if (!primaryGroupStr) return;
+    const primaryGroup = JSON.parse(primaryGroupStr);
+    populateFacultySelect(modalFaculty);
+    resetSelect(modalForm, "Загрузка форм...");
+    resetSelect(modalCourse, "Выберите курс");
+    resetSelect(modalGroup, "Выберите группу");
+    modalSaveBtn.disabled = true;
+    firstTimeModal.classList.remove("hidden");
+    modalTitle.textContent = "Изменить группу по умолчанию";
+    const savedFaculty = primaryGroup.faculty;
+    const savedForm = primaryGroup.form;
+    const savedCourse = primaryGroup.course;
+    const savedGroup = primaryGroup.group;
+    ensureSelectValue(modalFaculty, savedFaculty);
+    if (savedFaculty) {
+      modalFaculty.dispatchEvent(new Event('change', { bubbles: true }));
+      if (savedForm) {
+        modalForm.value = savedForm;
+        modalForm.dispatchEvent(new Event('change', { bubbles: true }));
+        if (savedCourse) {
+          modalCourse.value = savedCourse;
+          modalCourse.dispatchEvent(new Event('change', { bubbles: true }));
+          if (savedGroup) {
+            modalGroup.value = savedGroup;
+          }
+        }
+      }
+    }
+  });
   if (menuLogout) menuLogout.addEventListener('click', async () => {
     hideMenu();
     try { await api('/api/auth/logout', { method: 'POST' }); } catch (e) {}
