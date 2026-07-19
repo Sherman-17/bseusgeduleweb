@@ -694,8 +694,21 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     var chunks = [];
     req.on('data', function (c) { chunks.push(c); });
     req.on('end', function () {
-      console.error('[DEBUG body] chunks=', chunks.length, 'raw=', Buffer.concat(chunks).toString('utf-8'));
-      try { cb(null, JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')); }
+      var raw = Buffer.concat(chunks).toString('utf-8');
+      // ?????????? ????? (#account-form) ???????????? ??????? ? iframe ???
+      // application/x-www-form-urlencoded (login=...&password=...). ????????????
+      // ??? ???????: urlencoded ? JSON.
+      var ct = (req.headers['content-type'] || '').toLowerCase();
+      if (ct.indexOf('application/x-www-form-urlencoded') !== -1) {
+        try {
+          var params = new URLSearchParams(raw);
+          var obj = {};
+          params.forEach(function (v, k) { obj[k] = v; });
+          cb(null, obj);
+        } catch (e) { cb(null, {}); }
+        return;
+      }
+      try { cb(null, JSON.parse(raw || '{}')); }
       catch (e) { cb(null, {}); }
     });
   }
