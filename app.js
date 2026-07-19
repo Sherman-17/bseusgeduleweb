@@ -4958,15 +4958,10 @@ window.updateIntersectionAlerts = function() {
 let deferredInstallPrompt = null;
 const PWA_DISMISSED_KEY = "bseu_pwa_dismissed";
 
-function showInstallButton() {
-  const btn = document.getElementById('account-menu-install');
-  if (btn) btn.classList.remove('hidden');
-}
-
-function hideInstallButton() {
-  const btn = document.getElementById('account-menu-install');
-  if (btn) btn.classList.add('hidden');
-}
+// Кнопка «Скачать приложение» всегда видна в меню аккаунта (появляется
+// при нажатии на иконку аккаунта), поэтому show/hide больше не прячут её.
+function showInstallButton() {}
+function hideInstallButton() {}
 
 window.addEventListener('beforeinstallprompt', (e) => {
   // Браузер хочет показать нативное предложение — перехватываем,
