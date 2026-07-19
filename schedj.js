@@ -601,6 +601,14 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   var iconv = require('iconv-lite');
   var PORT = process.env.PORT || 3000;
 
+  // Используем __dirname для надёжного разрешения пути к auth-модулю
+  // независимо от текущего рабочего каталога на хостинге.
+  // Пробуем несколько вариантов расположения папки server относительно schedj.js.
+  var AUTH_MODULE_CANDIDATES = [
+    path.join(__dirname, 'server', 'auth'),
+    path.join(__dirname, '..', 'server', 'auth')
+  ];
+
   // BSEU declares UTF-8 but actually returns windows-1251 bytes. We try to
   // decode as win1251; if the result contains genuine cyrillic letters we use
   // it, otherwise we fall back to UTF-8.
@@ -642,7 +650,18 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   // --- ???????? ? ????????????? (?????+??????, ??? email) ---
   // ?????????????? ??????? ?????? ?? server/auth.js (SQLite + bcrypt).
   var auth;
-  try { auth = require('./server/auth'); } catch (e) { console.error('[AUTH] Failed to load auth module:', e.message); auth = null; }
+  for (var i = 0; i < AUTH_MODULE_CANDIDATES.length; i++) {
+    try {
+      auth = require(AUTH_MODULE_CANDIDATES[i]);
+      console.log('[AUTH] Auth module loaded successfully from', AUTH_MODULE_CANDIDATES[i]);
+      break;
+    } catch (e) {
+      console.error('[AUTH] Failed to load auth module from', AUTH_MODULE_CANDIDATES[i], ':', e.message);
+    }
+  }
+  if (!auth) {
+    console.error('[AUTH] Auth module could not be loaded from any candidate path');
+  }
 
   var COOKIE_NAME = 'bseu_session';
   var AUTH_RATE_LIMIT = 5;
