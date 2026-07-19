@@ -1,11 +1,152 @@
 const express = require('express');
 const path = require('path');
+const auth = require('./server/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Минимальный парсер cookies (без внешних зависимостей)
+app.use((req, res, next) => {
+  const raw = req.headers.cookie || '';
+  const cookies = {};
+  raw.split(';').forEach(pair => {
+    const idx = pair.indexOf('=');
+    if (idx === -1) return;
+    const k = pair.slice(0, idx).trim();
+    const v = pair.slice(idx + 1).trim();
+    if (k) cookies[k] = decodeURIComponent(v);
+  });
+  req.cookies = cookies;
+  // Простой аналог res.cookie (только нужные нам флаги)
+  res.cookie = (name, value, opts = {}) => {
+    let str = `${name}=${encodeURIComponent(value)}`;
+    if (opts.maxAge) str += `; Max-Age=${Math.floor(opts.maxAge / 1000)}`;
+    str += '; Path=' + (opts.path || '/');
+    if (opts.httpOnly) str += '; HttpOnly';
+    if (opts.sameSite) str += `; SameSite=${opts.sameSite}`;
+    res.setHeader('Set-Cookie', str);
+  };
+  res.clearCookie = (name, opts = {}) => {
+    res.setHeader('Set-Cookie', `${name}=; Path=${opts.path || '/'}; Max-Age=0; HttpOnly`);
+  };
+  next();
+});
+
+// ----- Аккаунты и синхронизация (логин+пароль, без email) -----
+const COOKIE_NAME = 'bseu_session';
+function getToken(req) {
+  return req.cookies ? (req.cookies[COOKIE_NAME] || (req.headers.authorization || '').replace(/^Bearer\s+/i, '')) : null;
+}
+function sessionUser(req) {
+  const token = getToken(req);
+  const s = auth.getSession(token);
+  return s;
+}
+function setSessionCookie(res, token) {
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: 1000 * 60 * 60 * 24 * 30,
+    path: '/'
+  });
+}
+
+// Простой in-memory rate-limit для эндпоинтов аутентификации
+// (5 попыток в минуту на IP). Защита от перебора пароля.
+const AUTH_RATE_LIMIT = 5;
+const AUTH_RATE_WINDOW = 60 * 1000;
+const authAttempts = new Map(); // ip -> { count, resetAt }
+function authRateLimited(ip) {
+  const now = Date.now();
+  const rec = authAttempts.get(ip);
+  if (!rec || rec.resetAt < now) {
+    authAttempts.set(ip, { count: 1, resetAt: now + AUTH_RATE_WINDOW });
+    return false;
+  }
+  rec.count += 1;
+  if (rec.count > AUTH_RATE_LIMIT) return true;
+  return false;
+}
+function authRateHeaders(ip) {
+  const rec = authAttempts.get(ip);
+  if (!rec) return {};
+  const remaining = Math.max(0, AUTH_RATE_LIMIT - rec.count);
+  return { 'Retry-After': Math.ceil((rec.resetAt - Date.now()) / 1000) };
+}
+function guardAuth(req, res, next) {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  if (authRateLimited(ip)) {
+    res.status(429).json({ error: 'Слишком много попыток. Попробуйте позже.' });
+    return;
+  }
+  next();
+}
+
+app.post('/api/auth/register', guardAuth, (req, res) => {
+  try {
+    const { login, password } = req.body || {};
+    const user = auth.registerUser(login, password);
+    const token = auth.createSession(user.id, user.login);
+    setSessionCookie(res, token);
+    res.json({ ok: true, user: { login: user.login } });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/login', guardAuth, (req, res) => {
+  try {
+    const { login, password } = req.body || {};
+    const user = auth.verifyUser(login, password);
+    if (!user) return res.status(401).json({ error: 'Неверный логин или пароль' });
+    const token = auth.createSession(user.id, user.login);
+    setSessionCookie(res, token);
+    res.json({ ok: true, user: { login: user.login } });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const token = getToken(req);
+  auth.destroySession(token);
+  res.clearCookie(COOKIE_NAME, { path: '/' });
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const s = sessionUser(req);
+  if (!s) return res.json({ ok: true, user: null });
+  res.json({ ok: true, user: { login: s.login } });
+});
+
+app.delete('/api/auth/account', (req, res) => {
+  const s = sessionUser(req);
+  if (!s) return res.status(401).json({ error: 'Не авторизован' });
+  auth.deleteUser(s.userId);
+  res.clearCookie(COOKIE_NAME, { path: '/' });
+  res.json({ ok: true });
+});
+
+app.get('/api/sync', (req, res) => {
+  const s = sessionUser(req);
+  if (!s) return res.status(401).json({ error: 'Не авторизован' });
+  res.json({ ok: true, blocks: auth.getBlocks(s.userId) });
+});
+
+app.post('/api/sync', (req, res) => {
+  const s = sessionUser(req);
+  if (!s) return res.status(401).json({ error: 'Не авторизован' });
+  const blocks = Array.isArray(req.body && req.body.blocks) ? req.body.blocks : [];
+  const valid = blocks.filter(b => b && typeof b.kind === 'string' && typeof b.payload === 'string');
+  const merged = auth.applyBlocks(s.userId, valid);
+  res.json({ ok: true, blocks: merged });
+});
+
+
 
 // Serve static files
 app.use(express.static(__dirname));

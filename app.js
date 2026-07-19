@@ -130,6 +130,7 @@ function saveHomework(homework) {
   } catch (e) {
     console.warn("Не удалось сохранить домашнее задание:", e);
   }
+  if (window.AccountSync) window.AccountSync.schedulePush();
 }
 
 function getHomeworkForLesson(lesson) {
@@ -179,6 +180,7 @@ function saveAttendance(attendance) {
   } catch (e) {
     console.warn("Не удалось сохранить посещаемость:", e);
   }
+  if (window.AccountSync) window.AccountSync.schedulePush();
 }
 
 function setAttendanceStatus(lesson, status) {
@@ -212,6 +214,7 @@ function saveExcuses(excuses) {
   } catch (e) {
     console.warn("Не удалось сохранить оправдательные документы:", e);
   }
+  if (window.AccountSync) window.AccountSync.schedulePush();
 }
 
 function escapeHtml(text) {
@@ -3565,6 +3568,10 @@ document.addEventListener("DOMContentLoaded", () => {
     hideFirstTimeModal();
     setActiveTab("group");
     await applyGroupState(primaryGroup);
+    // После первого выбора группы предлагаем создать аккаунт (один раз)
+    if (window.AccountSync && typeof window.AccountSync.showOfferIfNeeded === 'function') {
+      setTimeout(() => window.AccountSync.showOfferIfNeeded(), 600);
+    }
   });
 
   // Кнопка "Моя группа по умолчанию" (звезда) — возврат к основной группе.
@@ -4063,6 +4070,7 @@ document.addEventListener("DOMContentLoaded", () => {
     localStorage.setItem('monthlySalariesPeriod', JSON.stringify(incomeMonthlySalariesPeriod));
     localStorage.setItem('dismissedIntersections', JSON.stringify(incomeDismissedIntersections));
     updateIncomeUI();
+    if (window.AccountSync) window.AccountSync.schedulePush();
   }
 
   // Настройки Доходов
@@ -4940,7 +4948,542 @@ window.updateIntersectionAlerts = function() {
   if (typeof updateMonthArrowAlerts === 'function') updateMonthArrowAlerts();
 };
 
-// ===== PWA: Регистрация service worker =====
-// Service worker уже зарегистрирован в начале файла для кэширования
-// Браузер сам предложит установить PWA при соответствии критериям
+// ===== PWA: предложение установки =====
+// Service worker уже зарегистрирован в начале файла для кэширования.
+// Чтобы предложение установки было надёжным (нативное событие браузера
+// может не появиться или исчезнуть, если пользователь его проигнорировал),
+// перехватываем beforeinstallprompt, сохраняем событие и показываем свою
+// кнопку установки. Она остаётся видимой, пока пользователь не установит
+// приложение или не отклонит именно её.
+let deferredInstallPrompt = null;
+const PWA_DISMISSED_KEY = "bseu_pwa_dismissed";
+
+function showInstallButton() {
+  const btn = document.getElementById('install-btn');
+  if (btn) btn.classList.remove('hidden');
+}
+
+function hideInstallButton() {
+  const btn = document.getElementById('install-btn');
+  if (btn) btn.classList.add('hidden');
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  // Браузер хочет показать нативное предложение — перехватываем,
+  // чтобы показать свою кнопку (она не исчезает сама по таймауту,
+  // в отличие от нативного баннера).
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  // Если пользователь ранее не отклонял именно нашу кнопку — показываем.
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(PWA_DISMISSED_KEY) === '1'; } catch (err) { /* ignore */ }
+  if (!dismissed) showInstallButton();
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  hideInstallButton();
+  try { localStorage.removeItem(PWA_DISMISSED_KEY); } catch (err) { /* ignore */ }
+});
+
+const installBtn = document.getElementById('install-btn');
+if (installBtn) {
+  installBtn.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) {
+      // На всякий случай: если событие ещё не пришло, подсказываем
+      // установку через меню браузера.
+      return;
+    }
+    deferredInstallPrompt.prompt();
+    const choiceResult = await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    if (choiceResult.outcome === 'accepted') {
+      hideInstallButton();
+    } else {
+      // Пользователь отклонил нашу кнопку — скрываем до следующего
+      // beforeinstallprompt, чтобы не «доставать».
+      hideInstallButton();
+      try { localStorage.setItem(PWA_DISMISSED_KEY, '1'); } catch (err) { /* ignore */ }
+    }
+  });
+}
+
+// ===== Аккаунт и синхронизация данных между устройствами =====
+// Бэкенд: Node + SQLite (server.js / server/auth.js). Аккаунт по логину и
+// паролю без email. Сессия — httpOnly cookie, выставляется бэкендом.
+(function initAccount() {
+  const ACCOUNT_OFFER_SHOWN_KEY = "bseu_account_offer_shown";
+
+  const accountBtn = document.getElementById('account-btn');
+  const accountMenu = document.getElementById('account-menu');
+  const menuStatus = document.getElementById('account-menu-status');
+  const menuInstall = document.getElementById('account-menu-install');
+  const menuCreate = document.getElementById('account-menu-create');
+  const menuLogout = document.getElementById('account-menu-logout');
+  const menuDelete = document.getElementById('account-menu-delete');
+
+  const accountModal = document.getElementById('account-modal');
+  const accountForm = document.getElementById('account-form');
+  const accountLogin = document.getElementById('account-login');
+  const accountPassword = document.getElementById('account-password');
+  const accountPasswordToggle = document.getElementById('account-password-toggle');
+  const accountError = document.getElementById('account-error');
+  const accountToggleMode = document.getElementById('account-toggle-mode');
+  const accountModalTitle = document.getElementById('account-modal-title');
+  const accountSubmitLabel = document.getElementById('account-submit-label');
+  const accountModalClose = document.getElementById('account-modal-close');
+
+  const deleteModal = document.getElementById('account-delete-modal');
+  const deleteConfirm = document.getElementById('account-delete-confirm');
+  const deleteCancel = document.getElementById('account-delete-cancel');
+
+  const offerModal = document.getElementById('account-offer-modal');
+  const offerSkip = document.getElementById('account-offer-skip');
+  const offerCreate = document.getElementById('account-offer-create');
+
+  // Состояние текущего пользователя (null = не авторизован)
+  let currentUser = null; // { login }
+
+  function api(path, opts = {}) {
+    return fetch(path, Object.assign({ credentials: 'include', headers: { 'Content-Type': 'application/json' } }, opts));
+  }
+
+  // --- Вспомогательные функции показа/скрытия модалок ---
+  function openModal(el) {
+    if (!el) return;
+    el.classList.remove('hidden', 'opacity-0');
+    el.classList.add('opacity-100');
+    const card = el.querySelector('div');
+    if (card) { card.classList.remove('scale-95'); card.classList.add('scale-100'); }
+  }
+  function closeModal(el) {
+    if (!el) return;
+    el.classList.remove('opacity-100');
+    el.classList.add('opacity-0');
+    const card = el.querySelector('div');
+    if (card) { card.classList.remove('scale-100'); card.classList.add('scale-95'); }
+    setTimeout(() => el.classList.add('hidden'), 300);
+  }
+
+  // --- Обновление выпадающего меню в зависимости от сессии ---
+  function refreshMenu() {
+    if (!accountMenu) return;
+    if (currentUser) {
+      menuStatus.textContent = 'Аккаунт: ' + currentUser.login;
+      menuCreate.classList.add('hidden');
+      menuLogout.classList.remove('hidden');
+      menuDelete.classList.remove('hidden');
+    } else {
+      menuStatus.textContent = 'Не авторизован';
+      menuCreate.classList.remove('hidden');
+      menuLogout.classList.add('hidden');
+      menuDelete.classList.add('hidden');
+    }
+  }
+
+  function showMenu() {
+    if (!accountMenu) return;
+    refreshMenu();
+    accountMenu.classList.remove('hidden');
+  }
+  function hideMenu() {
+    if (accountMenu) accountMenu.classList.add('hidden');
+  }
+
+  // --- Сборка локальных данных в блоки для синхронизации ---
+  const SYNC_KINDS = ['group', 'income', 'attendance', 'excuses', 'homework', 'misc'];
+
+  // Локальные метки времени изменения каждого блока и последнее известное
+  // серверное updatedAt — нужны для корректного last-write-wins при push.
+  const SYNC_TS_KEY = 'bseu_sync_ts';
+  function loadSyncTs() {
+    try { return JSON.parse(localStorage.getItem(SYNC_TS_KEY) || '{}'); }
+    catch (e) { return {}; }
+  }
+  function saveSyncTs(ts) {
+    try { localStorage.setItem(SYNC_TS_KEY, JSON.stringify(ts)); } catch (e) {}
+  }
+  // Помечаем блок изменённым локально (при записи из UI или после pullSync).
+  function touchBlock(kind, updatedAt) {
+    const ts = loadSyncTs();
+    ts[kind] = { local: Date.now(), server: Number(updatedAt) || 0 };
+    saveSyncTs(ts);
+  }
+
+  function loadBlock(kind) {
+    try {
+      if (kind === 'group') {
+        const group = localStorage.getItem('bseu_primary_group');
+        const lessons = localStorage.getItem('bseu_primary_group_lessons');
+        const sem = localStorage.getItem('bseu_semester_start_date');
+        return { group: group ? JSON.parse(group) : null, lessons: lessons ? JSON.parse(lessons) : null, semesterStartDate: sem || null };
+      }
+      if (kind === 'income') {
+        return {
+          jobs: JSON.parse(localStorage.getItem('jobs') || '[]'),
+          shifts: JSON.parse(localStorage.getItem('shifts') || '[]'),
+          currency: localStorage.getItem('currency') || 'BYN',
+          startDay: parseInt(localStorage.getItem('startDay')) || 1,
+          isMultiCurrency: localStorage.getItem('isMultiCurrency') === 'true',
+          monthlySalariesPeriod: JSON.parse(localStorage.getItem('monthlySalariesPeriod') || '{}'),
+          dismissedIntersections: JSON.parse(localStorage.getItem('dismissedIntersections') || '[]')
+        };
+      }
+      if (kind === 'attendance') return JSON.parse(localStorage.getItem('bseu_attendance_v1') || '{}');
+      if (kind === 'excuses') return JSON.parse(localStorage.getItem('bseu_excuses_v1') || '[]');
+      if (kind === 'homework') return JSON.parse(localStorage.getItem('bseu_homework_v1') || '{}');
+      if (kind === 'misc') return JSON.parse(localStorage.getItem('bseu_saved_state') || '{}');
+    } catch (e) {
+      console.warn('loadBlock error', kind, e);
+    }
+    return null;
+  }
+
+  function saveBlock(kind, payload) {
+    try {
+      if (kind === 'group') {
+        if (payload.group) localStorage.setItem('bseu_primary_group', JSON.stringify(payload.group));
+        if (payload.lessons) localStorage.setItem('bseu_primary_group_lessons', JSON.stringify(payload.lessons));
+        if (payload.semesterStartDate) localStorage.setItem('bseu_semester_start_date', payload.semesterStartDate);
+      } else if (kind === 'income') {
+        localStorage.setItem('jobs', JSON.stringify(payload.jobs || []));
+        localStorage.setItem('shifts', JSON.stringify(payload.shifts || []));
+        localStorage.setItem('currency', payload.currency || 'BYN');
+        localStorage.setItem('startDay', payload.startDay || 1);
+        localStorage.setItem('isMultiCurrency', !!payload.isMultiCurrency);
+        localStorage.setItem('monthlySalariesPeriod', JSON.stringify(payload.monthlySalariesPeriod || {}));
+        localStorage.setItem('dismissedIntersections', JSON.stringify(payload.dismissedIntersections || []));
+        if (typeof updateIncomeUI === 'function') updateIncomeUI();
+      } else if (kind === 'attendance') {
+        localStorage.setItem('bseu_attendance_v1', JSON.stringify(payload || {}));
+        if (typeof updateAbsencePanel === 'function') updateAbsencePanel();
+      } else if (kind === 'excuses') {
+        localStorage.setItem('bseu_excuses_v1', JSON.stringify(payload || []));
+        if (typeof updateAbsencePanel === 'function') updateAbsencePanel();
+      } else if (kind === 'homework') {
+        localStorage.setItem('bseu_homework_v1', JSON.stringify(payload || {}));
+      } else if (kind === 'misc') {
+        localStorage.setItem('bseu_saved_state', JSON.stringify(payload || {}));
+      }
+      // Локальное изменение блока — фиксируем метку для last-write-wins.
+      touchBlock(kind, 0);
+    } catch (e) {
+      console.warn('saveBlock error', kind, e);
+    }
+  }
+
+  // Собрать локальные блоки, изменившиеся после последней синхронизации.
+  // updatedAt берётся из локальной метки изменения (last-write-wins).
+  // Блок без записи в ts (локальные данные до первой синхронизации)
+  // считается изменённым локально и отправляется на сервер.
+  function collectLocalBlocks() {
+    const ts = loadSyncTs();
+    const blocks = [];
+    for (const kind of SYNC_KINDS) {
+      const payload = loadBlock(kind);
+      if (payload === null) continue;
+      const meta = ts[kind];
+      if (meta && meta.server && meta.local && meta.local <= meta.server) continue;
+      const updatedAt = (meta && meta.local) ? meta.local : Date.now();
+      blocks.push({ kind, payload: JSON.stringify(payload), updatedAt });
+    }
+    return blocks;
+  }
+
+  // Отправить локальные изменения на сервер (last-write-wins).
+  // Сервер применит блок, только если updatedAt клиента > серверного.
+  async function pushSync() {
+    if (!currentUser) return;
+    try {
+      const blocks = collectLocalBlocks();
+      if (!blocks.length) return;
+      const res = await api('/api/sync', { method: 'POST', body: JSON.stringify({ blocks }) });
+      const data = await res.json();
+      // Обновляем локальные метки серверным updatedAt из ответа (источник истины).
+      if (data.ok && data.blocks) {
+        const ts = loadSyncTs();
+        for (const kind of SYNC_KINDS) {
+          const b = data.blocks[kind];
+          if (b && ts[kind]) { ts[kind].server = Number(b.updatedAt) || 0; ts[kind].local = 0; }
+        }
+        saveSyncTs(ts);
+      }
+    } catch (e) {
+      console.warn('pushSync не удалось (офлайн?):', e);
+    }
+  }
+
+  // Подтянуть данные с сервера и применить локально (last-write-wins по updatedAt)
+  async function pullSync() {
+    if (!currentUser) return;
+    try {
+      const res = await api('/api/sync');
+      const data = await res.json();
+      if (!data.ok || !data.blocks) return;
+      const ts = loadSyncTs();
+      for (const kind of SYNC_KINDS) {
+        const block = data.blocks[kind];
+        if (!block) continue;
+        const serverUpdated = Number(block.updatedAt) || 0;
+        const meta = ts[kind];
+        // Пишем серверное, только если оно свежее локального изменения.
+        if (meta && meta.local && meta.local > serverUpdated) continue;
+        try {
+          const payload = JSON.parse(block.payload);
+          saveBlock(kind, payload);
+          // Фиксируем серверную метку как актуальную (локально не меняли).
+          ts[kind] = { local: 0, server: serverUpdated };
+        } catch (e) { console.warn('pullSync parse error', kind, e); }
+      }
+      saveSyncTs(ts);
+      // Перерисовываем зависимые части UI
+      if (typeof updateIncomeUI === 'function') updateIncomeUI();
+      if (typeof updateAbsencePanel === 'function') updateAbsencePanel();
+      if (typeof updateIntersectionAlerts === 'function') updateIntersectionAlerts();
+    } catch (e) {
+      console.warn('pullSync не удалось:', e);
+    }
+  }
+
+  // Дебаунс-обёртка, чтобы не слать запрос на каждое нажатие клавиши
+  let pushTimer = null;
+  function schedulePush() {
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => { pushTimer = null; pushSync(); }, 800);
+  }
+
+  // Публичный API для вызова из других мест (save*-обёртки, триггер предложения)
+  window.AccountSync = {
+    push: pushSync,
+    schedulePush: schedulePush,
+    pull: pullSync,
+    isLoggedIn: () => !!currentUser,
+    showOfferIfNeeded: showOfferIfNeeded,
+    refreshMenu
+  };
+
+  // Первичная сверка при входе: подтягиваем сервер, для блоков, которых нет
+  // на сервере, помечаем локальные данные к отправке; серверные (если есть)
+  // применяем локально. Гарантирует корректную миграцию старых local-data
+  // без затирки серверных данных на возвращающем устройстве.
+  async function bootstrapSync() {
+    if (!currentUser) return;
+    try {
+      const res = await api('/api/sync');
+      const data = await res.json();
+      const ts = loadSyncTs();
+      const blocks = (data.ok && data.blocks) ? data.blocks : {};
+      for (const kind of SYNC_KINDS) {
+        const serverBlock = blocks[kind];
+        if (serverBlock) {
+          const serverUpdated = Number(serverBlock.updatedAt) || 0;
+          try {
+            const payload = JSON.parse(serverBlock.payload);
+            saveBlock(kind, payload);
+            ts[kind] = { local: 0, server: serverUpdated };
+          } catch (e) { console.warn('bootstrapSync parse error', kind, e); }
+        } else if (loadBlock(kind) !== null) {
+          // Локально есть, на сервере нет — отправим при следующем push.
+          if (!ts[kind]) ts[kind] = { local: Date.now(), server: 0 };
+        }
+      }
+      saveSyncTs(ts);
+      if (typeof updateIncomeUI === 'function') updateIncomeUI();
+      if (typeof updateAbsencePanel === 'function') updateAbsencePanel();
+      if (typeof updateIntersectionAlerts === 'function') updateIntersectionAlerts();
+      await pushSync();
+    } catch (e) {
+      console.warn('bootstrapSync не удалось:', e);
+    }
+  }
+
+  // --- Проверка текущей сессии при загрузке ---
+  async function checkSession() {
+    try {
+      const res = await api('/api/auth/me');
+      const data = await res.json();
+      if (data.ok && data.user) {
+        currentUser = { login: data.user.login };
+        // При входе/наличии сессии сверяем локальные данные с сервером.
+        await bootstrapSync();
+      } else {
+        currentUser = null;
+      }
+    } catch (e) {
+      currentUser = null;
+    }
+    refreshMenu();
+  }
+
+  // --- Показ предложения создать аккаунт (один раз) ---
+  function showOfferIfNeeded() {
+    try {
+      if (localStorage.getItem(ACCOUNT_OFFER_SHOWN_KEY) === '1') return;
+    } catch (e) { /* ignore */ }
+    if (currentUser) {
+      // Уже авторизован — помечаем, чтобы больше не предлагать
+      try { localStorage.setItem(ACCOUNT_OFFER_SHOWN_KEY, '1'); } catch (e) {}
+      return;
+    }
+    if (offerModal) openModal(offerModal);
+  }
+
+  // --- Обработчики UI ---
+  if (accountBtn) {
+    accountBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (accountMenu.classList.contains('hidden')) showMenu();
+      else hideMenu();
+    });
+  }
+  // Закрытие меню при клике вне
+  document.addEventListener('click', (e) => {
+    if (accountMenu && !accountMenu.classList.contains('hidden') &&
+        !e.target.closest('#account-menu') && !e.target.closest('#account-btn')) {
+      hideMenu();
+    }
+  });
+
+  if (menuInstall) {
+    menuInstall.addEventListener('click', () => {
+      hideMenu();
+      if (typeof deferredInstallPrompt !== 'undefined' && deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+      } else {
+        alert('Чтобы установить приложение, откройте меню браузера (⋮) и выберите «Установить приложение» / «Добавить на главный экран».');
+      }
+    });
+  }
+  if (menuCreate) menuCreate.addEventListener('click', () => { hideMenu(); openAccountModal(false); });
+  if (menuLogout) menuLogout.addEventListener('click', async () => {
+    hideMenu();
+    try { await api('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+    currentUser = null;
+    refreshMenu();
+  });
+  if (menuDelete) menuDelete.addEventListener('click', () => { hideMenu(); if (deleteModal) openModal(deleteModal); });
+
+  if (deleteCancel) deleteCancel.addEventListener('click', () => closeModal(deleteModal));
+  if (deleteConfirm) deleteConfirm.addEventListener('click', async () => {
+    try { await api('/api/auth/account', { method: 'DELETE' }); } catch (e) {}
+    currentUser = null;
+    refreshMenu();
+    closeModal(deleteModal);
+  });
+
+  // --- Модалка аккаунта: вход / регистрация ---
+  let accountMode = 'login'; // 'login' | 'register'
+  function setAccountMode(mode) {
+    accountMode = mode;
+    if (mode === 'register') {
+      accountModalTitle.textContent = 'Создать аккаунт';
+      accountSubmitLabel.textContent = 'Создать';
+      accountToggleMode.textContent = 'Уже есть аккаунт? Войти';
+      accountPassword.setAttribute('autocomplete', 'new-password');
+      accountLogin.setAttribute('autocomplete', 'off');
+    } else {
+      accountModalTitle.textContent = 'Вход в аккаунт';
+      accountSubmitLabel.textContent = 'Войти';
+      accountToggleMode.textContent = 'Нет аккаунта? Создать';
+      accountPassword.setAttribute('autocomplete', 'current-password');
+      accountLogin.setAttribute('autocomplete', 'off');
+    }
+    if (accountError) accountError.classList.add('hidden');
+  }
+  function openAccountModal(register) {
+    setAccountMode(register ? 'register' : 'login');
+    accountForm.setAttribute('action', register ? '/api/auth/register' : '/api/auth/login');
+    openModal(accountModal);
+    setTimeout(() => accountLogin.focus(), 50);
+  }
+  if (accountToggleMode) accountToggleMode.addEventListener('click', () => {
+    setAccountMode(accountMode === 'login' ? 'register' : 'login');
+    accountForm.setAttribute('action', accountMode === 'register' ? '/api/auth/register' : '/api/auth/login');
+  });
+  if (accountModalClose) accountModalClose.addEventListener('click', () => closeModal(accountModal));
+
+  // Переключатель видимости пароля (значок глаза).
+  if (accountPasswordToggle) {
+    accountPasswordToggle.addEventListener('click', () => {
+      const show = accountPassword.type === 'password';
+      accountPassword.type = show ? 'text' : 'password';
+      const icon = accountPasswordToggle.querySelector('.material-symbols-outlined');
+      if (icon) icon.textContent = show ? 'visibility_off' : 'visibility';
+      accountPasswordToggle.setAttribute('aria-label', show ? 'Скрыть пароль' : 'Показать пароль');
+    });
+  }
+
+  // Отправка формы НАТИВНО (без preventDefault) в скрытый iframe.
+  // Это гарантирует, что встроенный менеджер паролей предложит сохранить
+  // учётные данные во ВСЕХ браузерах (Google/Chrome, Firefox, Safari, Edge,
+  // Brave, Opera и др.), а не только там, где есть Credential Management API.
+  // Сама навигация не происходит (iframe скрыт), а SPA-состояние и данные
+  // обновляются после ответа сервера (onload iframe) через checkSession().
+  const accountIframe = document.getElementById('account-form-iframe');
+  let accountSubmitting = false;
+  if (accountForm) {
+    accountForm.addEventListener('submit', (e) => {
+      const login = accountLogin.value.trim();
+      const password = accountPassword.value;
+      if (login.length < 3 || password.length < 4) {
+        e.preventDefault();
+        accountError.textContent = 'Логин (от 3 символов) и пароль (от 4 символов) обязательны.';
+        accountError.classList.remove('hidden');
+        return;
+      }
+      // Валидно — даём форме уйти нативно (триггер менеджера паролей).
+      if (accountError) accountError.classList.add('hidden');
+      accountSubmitting = true;
+    });
+  }
+  // После ответа сервера в iframe — обновляем SPA-состояние и данные.
+  if (accountIframe) {
+    accountIframe.addEventListener('load', () => {
+      if (!accountSubmitting) return;
+      accountSubmitting = false;
+      // Считываем тело ответа из iframe, чтобы показать ошибку при необходимости.
+      let data = {};
+      try {
+        const doc = accountIframe.contentDocument || accountIframe.contentWindow.document;
+        const text = doc && doc.body ? doc.body.innerText : '';
+        if (text) data = JSON.parse(text);
+      } catch (e) { /* iframe cross-origin/пусто — игнорируем */ }
+      if (data && data.ok) {
+        currentUser = { login: data.user ? data.user.login : accountLogin.value.trim() };
+        refreshMenu();
+        closeModal(accountModal);
+        // Сверяем локальные данные с сервером (last-write-wins) и отправляем
+        // локальные, которых ещё нет на сервере.
+        bootstrapSync();
+        // Дополнительно: Credential Management API, если браузер поддерживает.
+        if (navigator.credentials && navigator.credentials.store && window.PasswordCredential) {
+          try {
+            navigator.credentials.store(new window.PasswordCredential({
+              id: accountLogin.value.trim(), password: accountPassword.value, name: accountLogin.value.trim()
+            }));
+          } catch (err) { /* не критично */ }
+        }
+      } else if (data && data.error) {
+        accountError.textContent = data.error;
+        accountError.classList.remove('hidden');
+      }
+    });
+  }
+
+  // --- Модалка предложения ---
+  if (offerSkip) offerSkip.addEventListener('click', () => {
+    try { localStorage.setItem(ACCOUNT_OFFER_SHOWN_KEY, '1'); } catch (e) {}
+    closeModal(offerModal);
+  });
+  if (offerCreate) offerCreate.addEventListener('click', () => {
+    try { localStorage.setItem(ACCOUNT_OFFER_SHOWN_KEY, '1'); } catch (e) {}
+    closeModal(offerModal);
+    openAccountModal(true);
+  });
+
+  // Запускаем проверку сессии при загрузке
+  checkSession();
+})();
+
+
 
