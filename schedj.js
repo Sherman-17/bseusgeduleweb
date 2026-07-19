@@ -639,6 +639,133 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     });
   }
 
+  // --- ???????? ? ????????????? (?????+??????, ??? email) ---
+  // ?????????????? ??????? ?????? ?? server/auth.js (SQLite + bcrypt).
+  var auth;
+  try { auth = require('./server/auth'); } catch (e) { auth = null; }
+
+  var COOKIE_NAME = 'bseu_session';
+  var AUTH_RATE_LIMIT = 5;
+  var AUTH_RATE_WINDOW = 60 * 1000;
+  var authAttempts = {}; // ip -> { count, resetAt }
+
+  function parseCookies(req) {
+    var raw = req.headers.cookie || '';
+    var out = {};
+    raw.split(';').forEach(function (pair) {
+      var idx = pair.indexOf('=');
+      if (idx === -1) return;
+      var k = pair.slice(0, idx).trim();
+      var v = pair.slice(idx + 1).trim();
+      if (k) out[k] = decodeURIComponent(v);
+    });
+    return out;
+  }
+  function getToken(req) {
+    var c = parseCookies(req);
+    return c[COOKIE_NAME] || '';
+  }
+  function sendJson(res, status, obj, extraHeaders) {
+    var headers = { 'Content-Type': 'application/json; charset=utf-8' };
+    if (extraHeaders) Object.keys(extraHeaders).forEach(function (k) { headers[k] = extraHeaders[k]; });
+    res.writeHead(status, headers);
+    res.end(JSON.stringify(obj));
+  }
+  function setSessionCookie(res, token) {
+    var str = COOKIE_NAME + '=' + encodeURIComponent(token) +
+      '; Max-Age=' + Math.floor((1000 * 60 * 60 * 24 * 30) / 1000) +
+      '; Path=/; HttpOnly; SameSite=Lax';
+    res.setHeader('Set-Cookie', str);
+  }
+  function clearSessionCookie(res) {
+    res.setHeader('Set-Cookie', COOKIE_NAME + '=; Path=/; Max-Age=0; HttpOnly');
+  }
+  function authRateLimited(ip) {
+    var now = Date.now();
+    var rec = authAttempts[ip];
+    if (!rec || rec.resetAt < now) {
+      authAttempts[ip] = { count: 1, resetAt: now + AUTH_RATE_WINDOW };
+      return false;
+    }
+    rec.count += 1;
+    return rec.count > AUTH_RATE_LIMIT;
+  }
+  function readJsonBody(req, cb) {
+    var chunks = [];
+    req.on('data', function (c) { chunks.push(c); });
+    req.on('end', function () {
+      console.error('[DEBUG body] chunks=', chunks.length, 'raw=', Buffer.concat(chunks).toString('utf-8'));
+      try { cb(null, JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')); }
+      catch (e) { cb(null, {}); }
+    });
+  }
+  // ????????????? ?????????? ????????/?????????????.
+  function handleAuth(req, res, pathname) {
+    if (!auth) { sendJson(res, 500, { error: 'auth_disabled' }); return; }
+    var ip = req.socket.remoteAddress || 'unknown';
+    var token = getToken(req);
+    var session = auth.getSession(token);
+
+    if (pathname === '/api/auth/register' && req.method === 'POST') {
+      if (authRateLimited(ip)) { sendJson(res, 429, { error: '??????? ????? ???????. ?????????? ?????.' }); return; }
+      readJsonBody(req, function (err, body) {
+        console.error('[DEBUG register] body=', JSON.stringify(body), 'login=', body && body.login);
+        try {
+          var user = auth.registerUser(body.login, body.password);
+          var t = auth.createSession(user.id, user.login);
+          setSessionCookie(res, t);
+          sendJson(res, 200, { ok: true, user: { login: user.login } });
+        } catch (e) { sendJson(res, 400, { error: e.message }); }
+      });
+      return;
+    }
+    if (pathname === '/api/auth/login' && req.method === 'POST') {
+      if (authRateLimited(ip)) { sendJson(res, 429, { error: '??????? ????? ???????. ?????????? ?????.' }); return; }
+      readJsonBody(req, function (err, body) {
+        var user = auth.verifyUser(body.login, body.password);
+        if (!user) { sendJson(res, 401, { error: '???????? ????? ??? ??????' }); return; }
+        var t = auth.createSession(user.id, user.login);
+        setSessionCookie(res, t);
+        sendJson(res, 200, { ok: true, user: { login: user.login } });
+      });
+      return;
+    }
+    if (pathname === '/api/auth/logout' && req.method === 'POST') {
+      auth.destroySession(token);
+      clearSessionCookie(res);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (pathname === '/api/auth/me' && req.method === 'GET') {
+      if (!session) { sendJson(res, 200, { ok: true, user: null }); return; }
+      sendJson(res, 200, { ok: true, user: { login: session.login } });
+      return;
+    }
+    if (pathname === '/api/auth/account' && req.method === 'DELETE') {
+      if (!session) { sendJson(res, 401, { error: '?? ???????????' }); return; }
+      auth.deleteUser(session.userId);
+      clearSessionCookie(res);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (pathname === '/api/sync' && req.method === 'GET') {
+      if (!session) { sendJson(res, 401, { error: '?? ???????????' }); return; }
+      sendJson(res, 200, { ok: true, blocks: auth.getBlocks(session.userId) });
+      return;
+    }
+    if (pathname === '/api/sync' && req.method === 'POST') {
+      if (!session) { sendJson(res, 401, { error: '?? ???????????' }); return; }
+      readJsonBody(req, function (err, body) {
+        var blocks = Array.isArray(body.blocks) ? body.blocks : [];
+        var valid = blocks.filter(function (b) { return b && typeof b.kind === 'string' && typeof b.payload === 'string'; });
+        var merged = auth.applyBlocks(session.userId, valid);
+        sendJson(res, 200, { ok: true, blocks: merged });
+      });
+      return;
+    }
+    sendJson(res, 404, { error: 'not_found' });
+  }
+
   // Proxy to BSEU schedule endpoint so the browser can fetch forms/courses/groups.
   function handleProxy(req, res) {
     var bodyChunks = [];
@@ -706,6 +833,12 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
         'https://studhub.by/Schedule/3/audiences/' + encodeURIComponent(audience) + '/schedule/date/' + encodeURIComponent(date),
         res
       );
+      return;
+    }
+
+    // --- ???????? ? ????????????? (?????+??????, ??? email) ---
+    if (pathname.indexOf('/api/auth/') === 0 || pathname === '/api/sync') {
+      handleAuth(req, res, pathname);
       return;
     }
 
