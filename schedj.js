@@ -661,6 +661,29 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   }
   if (!auth) {
     console.error('[AUTH] Auth module could not be loaded from any candidate path');
+    console.error('[AUTH] __dirname =', __dirname);
+    console.error('[AUTH] process.cwd() =', process.cwd());
+    console.error('[AUTH] Listing server/ directory:');
+    try {
+      var serverDir = path.join(__dirname, 'server');
+      console.error('[AUTH] server dir contents:', fs.readdirSync(serverDir));
+    } catch (e2) {
+      console.error('[AUTH] Cannot list server dir:', e2.message);
+    }
+    // Последний fallback: ищем server/auth.js рекурсивно в родительских директориях
+    try {
+      var searchDir = __dirname;
+      for (var depth = 0; depth < 5; depth++) {
+        var parent = path.dirname(searchDir);
+        var candidate = path.join(parent, 'server', 'auth');
+        try {
+          auth = require(candidate);
+          console.log('[AUTH] Auth module found via filesystem search at', candidate);
+          break;
+        } catch (e3) {}
+        searchDir = parent;
+      }
+    } catch (e4) {}
   }
 
   var COOKIE_NAME = 'bseu_session';
