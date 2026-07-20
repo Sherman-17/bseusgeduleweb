@@ -896,7 +896,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
        if (cached) return cached.value;
        throw error;
      }
-   }
+  }
 
   function parseScheduleHtml(html) {
     const $ = cheerio.load(html);
@@ -1105,7 +1105,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
        const parsedData = parseScheduleHtml(htmlText);
        fileSetCache(cacheKey, parsedData);
        return { ...parsedData, isFallback: false };
-     } catch (error) {
+    } catch (error) {
       console.error(`[BSEU Schedule] Failed for ${cacheKey}:`, error);
       if (cached) {
         return {
@@ -1118,7 +1118,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     }
   }
 
-  app.get('/api/forms', async (req, res) => {
+app.get('/api/forms', async (req, res) => {
     try {
       const { faculty } = req.query;
       const data = await fetchBseuList("__id.22.main.inpFldsA.GetForms", { faculty });
@@ -1127,7 +1127,6 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       res.status(500).json({ error: error.message });
     }
   });
-
   app.get('/api/courses', async (req, res) => {
     try {
       const { faculty, form } = req.query;
@@ -1137,7 +1136,6 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       res.status(500).json({ error: error.message });
     }
   });
-
   app.get('/api/groups', async (req, res) => {
     try {
       const { faculty, form, course } = req.query;
@@ -1147,7 +1145,6 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       res.status(500).json({ error: error.message });
     }
   });
-
   app.get('/api/teachers', async (req, res) => {
     try {
       const { q } = req.query;
@@ -1214,10 +1211,22 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       const map = new Map();
       for (const p of (schedule || [])) {
         const full = p.audience;
-        if (!full || !/\d|\//.test(String(full).trim())) continue;
-        // фильтруем по токенам, если задан q
-        if (q && !p.audienceTokens.some(t => t.includes(q))) continue;
-        map.set(full, (map.get(full) || 0) + 1);
+        if (!full) continue;
+        // Разделяем строку аудиторий по запятым и обрабатываем каждую отдельно
+        const roomParts = String(full).trim().split(',').map(r => r.trim());
+        // Проверяем, что все части содержат цифры (фильтруем фамилии преподавателей)
+        const allValid = roomParts.every(part => /\d/.test(part.trim()));
+        if (!allValid) continue;
+        // Добавляем каждую аудиторию отдельно в список
+        for (const room of roomParts) {
+          // Для фильтрации по q проверяем полную аудиторию
+          if (q) {
+            // Проверяем, что строка поиска содержится в аудитории
+            // (например, "2" найдет "2/301", "301" найдет "2/301", "2/301" найдет "2/301")
+            if (!room.toLowerCase().includes(q)) continue;
+          }
+          map.set(room, (map.get(room) || 0) + 1);
+        }
       }
       const list = Array.from(map.entries())
         .map(([audience, count]) => ({ audience, count }))
@@ -1255,6 +1264,21 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   // Кэш расписания по аудиториям: { "2/301": [{ subject, type, teacher, groupText, startTime, endTime, dates, audience, audienceTokens }, ...] }
   let audienceScheduleCache = {};
   let audienceScheduleUpdatedAt = 0;
+
+  // --- Загрузка кэша из файла (если есть) ---
+  const CACHE_FILE = path.join(__dirname, 'fullScheduleCache.json');
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const cachedData = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+      fullScheduleCache = cachedData.fullScheduleCache || null;
+      fullScheduleUpdatedAt = cachedData.updatedAt || 0;
+      audienceScheduleCache = cachedData.audienceScheduleCache || {};
+      audienceScheduleUpdatedAt = cachedData.audienceScheduleUpdatedAt || 0;
+      console.log('[Cache] Загружен кэш из файла:', CACHE_FILE);
+    }
+  } catch (e) {
+    console.warn('[Cache] Не удалось загрузить кэш из файла:', e.message);
+  }
 
   // Получить все группы факультета (каскад форма -> курс -> группа)
   async function getFacultyGroups(faculty) {
@@ -1378,7 +1402,12 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
             }
             if (!dates.length) continue;
             // Пропускаем записи, где аудитория не валидна (содержит фамилии преподавателей и т.п.)
-            if (!l.room || !/\d|\//.test(String(l.room).trim())) continue;
+            if (!l.room) continue;
+            // Проверяем, что все части (разделённые запятыми) содержат цифры
+            const roomStr = String(l.room).trim();
+            const roomParts = roomStr.split(',').map(p => p.trim());
+            const allValid = roomParts.every(part => /\d/.test(part));
+            if (!allValid) continue;
             const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
             const entry = {
               audience: l.room,
@@ -1407,6 +1436,20 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       fullScheduleCache = all;
       fullScheduleUpdatedAt = Date.now();
       audienceScheduleUpdatedAt = Date.now();
+      
+      // Сохраняем кэш в файл для последующего использования
+      try {
+        fs.writeFileSync(CACHE_FILE, JSON.stringify({
+          fullScheduleCache,
+          audienceScheduleCache,
+          updatedAt: fullScheduleUpdatedAt,
+          audienceScheduleUpdatedAt
+        }, null, 2));
+        console.log('[Cache] Кэш сохранён в файл:', CACHE_FILE);
+      } catch (e) {
+        console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
+      }
+      
       console.log(`[FullSchedule] Готово: ${all.length} пар, ${allGroups.length} групп, за ${((Date.now() - t0) / 1000).toFixed(1)} с`);
       fullScheduleBuilding = false;
       return all;
@@ -1468,8 +1511,12 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running at http://0.0.0.0:${PORT}`);
-    // Запускаем сборку полной копии расписания сразу и затем каждые 10 минут
-    buildFullSchedule().catch(e => console.error('[FullSchedule] Ошибка начальной сборки:', e.message));
+    if (!fullScheduleCache) {
+      console.warn('[Cache] Кэш не загружен. Пытаемся собрать через API...');
+      buildFullSchedule().catch(e => console.error('[FullSchedule] Ошибка начальной сборки:', e.message));
+    } else {
+      console.log(`[Cache] Загружен кэш с ${fullScheduleCache.length} записями.`);
+    }
     setInterval(() => {
       buildFullSchedule().catch(e => console.error('[FullSchedule] Ошибка периодической сборки:', e.message));
     }, FULL_SCHEDULE_INTERVAL);
