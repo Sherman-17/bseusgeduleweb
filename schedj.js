@@ -925,20 +925,22 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     
     const semesterMatch = html.match(/<!--(?:first|second)\s+semester=(.*?)-->/i);
     if (semesterMatch) {
-      semesterStartDate = new Date(semesterMatch[1]);
+      // Нормализуем к календарной дате YYYY-MM-DD (по UTC), чтобы расчёт пар
+      // не зависел от часового пояса сервера (локально и на Render совпадал).
+      semesterStartDate = new Date(semesterMatch[1].trim()).toISOString().slice(0, 10);
     } else {
       const weekMatch = html.match(/Текущая\s+-\s+<strong>(\d+)<\/strong>\s+учебная\s+неделя/i);
       if (weekMatch) {
         const currentWeekNum = Number(weekMatch[1]);
         currentSemesterWeek = currentWeekNum;
         const today = new Date();
-        const day = today.getDay();
-        const diff = today.getDate() - day + (day === 0 ? -6 : 1);
-        const todayMonday = new Date(today.setDate(diff));
-        todayMonday.setHours(0, 0, 0, 0);
-        semesterStartDate = new Date(todayMonday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
+        const day = today.getUTCDay();
+        const diff = today.getUTCDate() - day + (day === 0 ? -6 : 1);
+        const monday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + diff));
+        const sd = new Date(monday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
+        semesterStartDate = sd.toISOString().slice(0, 10);
       } else {
-        semesterStartDate = new Date();
+        semesterStartDate = new Date().toISOString().slice(0, 10);
         currentSemesterWeek = 1;
       }
     }
@@ -1025,7 +1027,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
             
             const teacherSpan = contentCell.find('.teacher, .teacher.dd');
             teacher = teacherSpan.length ? teacherSpan.text().trim() : '';
-            if (!teacher) teacher = extractTeacherFromCell(contentCell);
+            if (!teacher) teacher = extractTeacherFromCell(contentCell, $);
             
             const clone = contentCell.clone();
             clone.find('.distype').remove();
@@ -1363,17 +1365,20 @@ app.get('/api/forms', async (req, res) => {
     };
     const dayIndex = daysOfWeekMap[String(dayName || '').toLowerCase().trim()];
     if (dayIndex === undefined) return null;
-    const start = new Date(semesterStartDate);
-    const monday = new Date(start);
-    const sd = monday.getDay();
-    monday.setDate(monday.getDate() - (sd === 0 ? 6 : sd - 1));
-    monday.setHours(0, 0, 0, 0);
-    const result = new Date(monday);
-    result.setDate(monday.getDate() + (weekNum - 1) * 7 + dayIndex);
-    const y = result.getFullYear();
-    const m = String(result.getMonth() + 1).padStart(2, '0');
-    const d = String(result.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+    // Работаем строго с календарными датами (UTC), без учёта часового пояса
+    // сервера — иначе на Render (UTC) даты сдвигаются на день относительно
+    // календаря пользователя.
+    const m = String(semesterStartDate).match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return null;
+    const sy = Number(m[1]), sm = Number(m[2]) - 1, sd = Number(m[3]);
+    let dow = new Date(Date.UTC(sy, sm, sd)).getUTCDay();
+    const diffToMon = (dow === 0 ? -6 : 1 - dow);
+    const monday = new Date(Date.UTC(sy, sm, sd + diffToMon));
+    monday.setUTCDate(monday.getUTCDate() + (weekNum - 1) * 7 + dayIndex);
+    const y = monday.getUTCFullYear();
+    const mo = String(monday.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(monday.getUTCDate()).padStart(2, '0');
+    return `${y}-${mo}-${d}`;
   }
 
   function parseWeeks(weeksStr) {
@@ -1412,7 +1417,7 @@ app.get('/api/forms', async (req, res) => {
   // Извлечение преподавателя из ячейки пары. BSEU хранит имя в разных
   // вариантах (span.teacher, span.teacher.dd, a.teacher, любой элемент с
   // классом "teacher" внутри), а иногда — просто текстом "Фамилия И.О.".
-  function extractTeacherFromCell(contentCell) {
+  function extractTeacherFromCell(contentCell, $) {
     if (!contentCell || !contentCell.length) return '';
     let t = '';
     const sel = contentCell.find('.teacher, a.teacher, span[class*="teacher"], b.teacher');
@@ -1605,6 +1610,12 @@ app.get('/api/forms', async (req, res) => {
     }
     
     const src = schedule || fullScheduleCache || [];
+    // Если запрос содержит слэш (корпус/аудитория, напр. "2/301") — точное
+    // совпадение по полной аудитории (в т.ч. среди объединённых строк
+    // "2/301, 2/406"). Голый номер ("301") — по токенам по всем корпусам.
+    const hasSlash = String(targetAud).includes('/');
+    const targetRooms = String(targetAud).split(',').map(r => r.trim());
+    const queryTokens = audienceTokens(targetAud);
 
     // Объединяем карточки одной и той же пары (один предмет, тип, время и
     // преподаватель), идущей у нескольких групп одновременно (например, лекция),
@@ -1617,7 +1628,13 @@ app.get('/api/forms', async (req, res) => {
       `${(p.teacher || '').trim().toLowerCase()}`;
     const byKey = new Map();
     for (const p of src) {
-      if (!((p.audience === targetAud || p.audienceTokens.includes(targetAud)) && p.dates.includes(date))) continue;
+      if (!p.dates.includes(date)) continue;
+      // Точное совпадение по полной аудитории (в т.ч. для объединённых
+      // строк вида "2/301, 2/406"); голый номер — по токенам.
+      const rooms = String(p.audience || '').split(',').map(r => r.trim());
+      const exact = rooms.some(r => targetRooms.includes(r));
+      const byToken = !hasSlash && queryTokens.length > 0 && p.audienceTokens.some(t => queryTokens.includes(t));
+      if (!exact && !byToken) continue;
       const k = keyOf(p);
       let card = byKey.get(k);
       if (!card) {
