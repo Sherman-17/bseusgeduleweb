@@ -191,7 +191,29 @@ async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
   }
 }
 
-// ===== BSEU schedule engine (same as schedj.js) =====
+// Повтор запроса при транзитных сбоях BSEU (502/503/429, таймаут, сетевая
+// ошибка). Без этого сборка полного расписания теряет целые факультеты/группы
+// из-за случайных 502 Bad Gateway, и кэш аудиторий собирается неполным.
+async function fetchWithRetry(url, options = {}, { retries = 4, baseDelay = 500, timeout = FETCH_TIMEOUT } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetchWithTimeout(url, options, timeout);
+      // 4xx (кроме 429) не являются транзитными — не повторяем, отдаём как есть.
+      if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
+        return response;
+      }
+      lastErr = new Error(`HTTP status ${response.status}`);
+    } catch (error) {
+      lastErr = error; // таймаут (AbortError) или сетевая ошибка — транзитные
+    }
+    if (attempt < retries) {
+      const delay = baseDelay * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
 function toWin1251Url(str) {
   const buf = iconv.encode(str, 'win1251');
   let out = '';
@@ -236,7 +258,7 @@ async function fetchBseuList(action, params = {}) {
   const bodyString = bodyParts.join("&");
 
   try {
-    const response = await fetchWithTimeout("https://bseu.by/schedule/", {
+    const response = await fetchWithRetry("https://bseu.by/schedule/", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=windows-1251",
@@ -419,7 +441,7 @@ async function getScheduleWithCache(cacheKey, bodyString) {
   const cacheTTL = 2 * 60 * 60 * 1000;
   if (cached && (now - cached.updatedAt < cacheTTL)) return { ...cached.value, isFallback: false };
   try {
-    const response = await fetchWithTimeout("https://bseu.by/schedule/", {
+    const response = await fetchWithRetry("https://bseu.by/schedule/", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=windows-1251",
