@@ -425,7 +425,28 @@ async function proxyJson(url, res) {
 }
 
 app.get('/api/audiences', async (req, res) => {
-  await proxyJson('https://studhub.by/Schedule/3/audiences?', res);
+  try {
+    const q = (req.query.q || '').trim().toLowerCase();
+    const schedule = await ensureFullSchedule();
+    const map = new Map();
+    for (const p of (schedule || [])) {
+      const full = p.audience;
+      if (!full || !/\d|\//.test(String(full).trim())) continue;
+      // фильтруем по токенам, если задан q
+      if (q && !p.audienceTokens.some(t => t.includes(q))) continue;
+      map.set(full, (map.get(full) || 0) + 1);
+    }
+    const list = Array.from(map.entries())
+      .map(([audience, count]) => ({ audience, count }))
+      .sort((a, b) => {
+        const na = Number(a.audience.replace(/\D/g, '')) || 0;
+        const nb = Number(b.audience.replace(/\D/g, '')) || 0;
+        return na - nb || a.audience.localeCompare(b.audience);
+      });
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Каскадные списки для режима "По группе"
@@ -577,6 +598,8 @@ async function buildFullSchedule() {
             if (d) dates.push(d);
           }
           if (!dates.length) continue;
+          // Пропускаем записи, где аудитория не валидна (содержит фамилии преподавателей и т.п.)
+          if (!l.room || !/\d|\//.test(String(l.room).trim())) continue;
           const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
           const entry = {
             audience: l.room,
