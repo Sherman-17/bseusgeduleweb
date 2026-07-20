@@ -1317,8 +1317,37 @@ app.get('/api/forms', async (req, res) => {
     console.warn('[Cache] Не удалось загрузить кэш из файла:', e.message);
   }
   
+  // Диапазон дат, покрытых полной копией расписания (семестр).
+  // Клиент использует его, чтобы ограничить календарь аудитории и подставить
+  // разумную дату по умолчанию (вместо "сегодня", которая часто оказывается
+  // вне учебного семестра — отсюда жалоба "расписание аудитории не отображается").
+  function getScheduleDateRange() {
+    let min = null;
+    let max = null;
+    const src = fullScheduleCache || [];
+    for (const p of src) {
+      for (const d of (p.dates || [])) {
+        if (min === null || d < min) min = d;
+        if (max === null || d > max) max = d;
+      }
+    }
+    return { min, max };
+  }
+
+  app.get('/api/schedule-range', (req, res) => {
+    const range = getScheduleDateRange();
+    res.json({
+      ok: true,
+      min: range.min,
+      max: range.max,
+      hasCache: !!fullScheduleCache,
+      building: fullScheduleBuilding
+    });
+  });
+
   // ===== Health check endpoint для Render =====
   app.get('/api/status', (req, res) => {
+    const range = getScheduleDateRange();
     res.json({
       status: 'ok',
       uptime: process.uptime(),
@@ -1332,6 +1361,7 @@ app.get('/api/forms', async (req, res) => {
         error: fullScheduleError,
         buildingTime: fullScheduleStartedAt ? Math.floor((Date.now() - fullScheduleStartedAt) / 1000) + 's' : null
       },
+      scheduleRange: range,
       nodeVersion: process.version,
       timestamp: Date.now()
     });
@@ -1412,6 +1442,21 @@ app.get('/api/forms', async (req, res) => {
       if (m) tokens.push(m[0]);
     });
     return tokens;
+  }
+
+  // Возвращает только те аудитории пары, которые реально совпали с запросом.
+  // Нужно, чтобы в режиме аудитории для "2/300" не показывались все комнаты
+  // исходной строки BSEU ("2/300, 2/405"), а только запрошенная "2/300".
+  function matchedRoomsOf(audience, hasSlash, targetRooms, queryTokens) {
+    const rooms = String(audience || '').split(',').map(r => r.trim()).filter(Boolean);
+    if (!rooms.length) return [];
+    if (hasSlash) {
+      return rooms.filter(r => targetRooms.includes(r));
+    }
+    return rooms.filter(r => {
+      const toks = audienceTokens(r);
+      return queryTokens.some(qt => toks.includes(qt));
+    });
   }
 
   // Извлечение преподавателя из ячейки пары. BSEU хранит имя в разных
@@ -1636,6 +1681,7 @@ app.get('/api/forms', async (req, res) => {
       const byToken = !hasSlash && queryTokens.length > 0 && p.audienceTokens.some(t => queryTokens.includes(t));
       if (!exact && !byToken) continue;
       const k = keyOf(p);
+      const mr = matchedRoomsOf(p.audience, hasSlash, targetRooms, queryTokens);
       let card = byKey.get(k);
       if (!card) {
         card = {
@@ -1643,11 +1689,15 @@ app.get('/api/forms', async (req, res) => {
           lessonTypeShortNameRU: p.type,
           teachers: p.teacher ? [p.teacher] : [],
           groups: [],
-          audience: p.audience,
+          audience: mr.join(', '),
           startTime: p.startTime,
           endTime: p.endTime
         };
         byKey.set(k, card);
+      } else {
+        const existing = String(card.audience || '').split(',').map(s => s.trim()).filter(Boolean);
+        for (const r of mr) if (!existing.includes(r)) existing.push(r);
+        card.audience = existing.join(', ');
       }
       if (p.groupText && !card.groups.includes(p.groupText)) {
         card.groups.push(p.groupText);

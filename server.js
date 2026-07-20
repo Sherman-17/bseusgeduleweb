@@ -257,6 +257,29 @@ async function fetchBseuList(action, params = {}) {
   }
 }
 
+// BSEU отдаёт дату начала семестра (напр. "Mon Feb 8 00:00:00 UTC+0300 2026"),
+// и эта дата может приходиться на субботу/воскресенье (а из-за часового пояса
+// в строке ещё и "уезжает" на день назад). По факту учебная неделя 1 начинается
+// со СЛЕДУЮЩЕГО понедельника после этой даты — иначе всё расписание (и фильтр
+// по датам в режиме аудитории) съезжает ровно на неделю. Приводим дату начала
+// семестра к понедельнику недели, её содержащей, и если он оказался раньше
+// самой даты начала (воскресенье/суббота) — сдвигаем на неделю вперёд.
+function normalizeSemesterStart(dateStr) {
+  const m = String(dateStr).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return dateStr;
+  const sy = Number(m[1]), sm = Number(m[2]) - 1, sd = Number(m[3]);
+  const dow = new Date(Date.UTC(sy, sm, sd)).getUTCDay(); // 0 = воскресенье
+  const daysSinceMonday = dow === 0 ? 6 : dow - 1;
+  let monday = new Date(Date.UTC(sy, sm, sd - daysSinceMonday));
+  if (monday.getTime() < Date.UTC(sy, sm, sd)) {
+    monday.setUTCDate(monday.getUTCDate() + 7);
+  }
+  const y = monday.getUTCFullYear();
+  const mo = String(monday.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(monday.getUTCDate()).padStart(2, '0');
+  return `${y}-${mo}-${d}`;
+}
+
 function parseScheduleHtml(html) {
   const $ = cheerio.load(html);
   const table = $('table').first();
@@ -266,7 +289,7 @@ function parseScheduleHtml(html) {
   if (semesterMatch) {
     // Нормализуем к календарной дате YYYY-MM-DD (по UTC), чтобы расчёт пар
     // не зависел от часового пояса сервера (локально и на Render совпадал).
-    semesterStartDate = new Date(semesterMatch[1].trim()).toISOString().slice(0, 10);
+    semesterStartDate = normalizeSemesterStart(new Date(semesterMatch[1].trim()).toISOString().slice(0, 10));
   } else {
     const weekMatch = html.match(/Текущая\s+-\s+<strong>(\d+)<\/strong>\s+учебная\s+неделя/i);
     if (weekMatch) {
@@ -275,9 +298,9 @@ function parseScheduleHtml(html) {
       const today = new Date();
       const day = today.getUTCDay();
       const diff = today.getUTCDate() - day + (day === 0 ? -6 : 1);
-      const monday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + diff));
+      const monday = new Date(Date.UTC(today.getFullYear(), today.getUTCMonth(), today.getUTCDate() + diff));
       const sd = new Date(monday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
-      semesterStartDate = sd.toISOString().slice(0, 10);
+      semesterStartDate = normalizeSemesterStart(sd.toISOString().slice(0, 10));
     } else {
       semesterStartDate = new Date().toISOString().slice(0, 10);
       currentSemesterWeek = 1;
@@ -507,6 +530,21 @@ function audienceTokens(room) {
     if (m) tokens.push(m[0]);
   });
   return tokens;
+}
+
+// Возвращает только те аудитории пары, которые реально совпали с запросом.
+// Нужно, чтобы в режиме аудитории для "2/300" не показывались все комнаты
+// исходной строки BSEU ("2/300, 2/405"), а только запрошенная "2/300".
+function matchedRoomsOf(audience, hasSlash, targetRooms, queryTokens) {
+  const rooms = String(audience || '').split(',').map(r => r.trim()).filter(Boolean);
+  if (!rooms.length) return [];
+  if (hasSlash) {
+    return rooms.filter(r => targetRooms.includes(r));
+  }
+  return rooms.filter(r => {
+    const toks = audienceTokens(r);
+    return queryTokens.some(qt => toks.includes(qt));
+  });
 }
 
 // Извлечение преподавателя из ячейки пары. BSEU хранит имя в разных
@@ -742,6 +780,7 @@ async function getAudienceScheduleBseu(audience, date) {
   const byKey = new Map();
   for (const p of matched) {
     const k = keyOf(p);
+    const mr = matchedRoomsOf(p.audience, hasSlash, targetRooms, queryTokens);
     let card = byKey.get(k);
     if (!card) {
       card = {
@@ -749,11 +788,15 @@ async function getAudienceScheduleBseu(audience, date) {
         lessonTypeShortNameRU: p.type,
         teachers: p.teacher ? [p.teacher] : [],
         groups: [],
-        audience: p.audience,
+        audience: mr.join(', '),
         startTime: p.startTime,
         endTime: p.endTime
       };
       byKey.set(k, card);
+    } else {
+      const existing = String(card.audience || '').split(',').map(s => s.trim()).filter(Boolean);
+      for (const r of mr) if (!existing.includes(r)) existing.push(r);
+      card.audience = existing.join(', ');
     }
     if (p.groupText && !card.groups.includes(p.groupText)) {
       card.groups.push(p.groupText);

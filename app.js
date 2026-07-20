@@ -474,7 +474,7 @@ function addExcuse(label, start, end) {
   syncAllAttendanceToggles();
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   // Селекторы UI
   const facultySelect = document.getElementById("faculty");
   const formSelect = document.getElementById("form");
@@ -517,6 +517,14 @@ document.addEventListener("DOMContentLoaded", () => {
    const weekNext = document.getElementById("week-next");
    let roomCalendarMonth = new Date();
    let allAudiences = [];
+   // Диапазон дат учебного семестра, покрытый серверным кэшем расписания.
+   // Используется, чтобы ограничить календарь аудитории и подставить
+   // разумную дату по умолчанию (вместо "сегодня", которая часто оказывается
+   // вне семестра — отсюда расписание аудитории казалось пустым).
+   let roomScheduleRange = { min: null, max: null };
+   // Счётчик ретраев, пока сервер собирает полную копию расписания аудиторий.
+   let roomBuildingRetries = 0;
+   const ROOM_BUILD_MAX_RETRIES = 12; // ~1 минута (по 5 с)
    
    const scheduleContainer = document.getElementById("schedule-container");
   const scheduleTitle = document.getElementById("schedule-title");
@@ -554,6 +562,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Загрузка сохраненного состояния
   loadSavedState();
+  // Сначала получаем диапазон дат семестра, чтобы setRoomDate (в loadAudiences)
+  // могла подставить дату внутри семестра, а не "сегодня" (иначе race condition:
+  // диапазон грузится асинхронно уже после установки даты).
+  await loadScheduleRange();
   loadAudiences();
 
   // Переключение табов
@@ -1572,12 +1584,40 @@ document.addEventListener("DOMContentLoaded", () => {
     return !Number.isNaN(d.getTime());
   }
 
+  // Ограничения по диапазону семестра в режиме аудитории убраны — любая
+  // дата выбираема, календарь не блокирует выбор.
+  function isRoomDateInRange(value) {
+    return true;
+  }
+
+  // Дата по умолчанию для режима аудитории — всегда сегодняшняя (актуальная)
+   // дата. Искусственные ограничения по диапазону семестра убраны: пользователь
+   // сам выбирает любую дату, а календарь по умолчанию открыт на сегодня.
+   function defaultRoomDate() {
+     return todayISO();
+   }
+
   function setRoomDate(isoDate) {
-    const normalized = isValidRoomDate(isoDate) ? isoDate : todayISO();
+    const normalized = isValidRoomDate(isoDate) ? isoDate : defaultRoomDate();
     roomDateInput.value = normalized;
     roomDateDisplay.value = formatHumanDate(normalized);
     const [year, month] = normalized.split('-').map(Number);
     roomCalendarMonth = new Date(year, month - 1, 1);
+  }
+
+  // Загружает с сервера диапазон дат расписания (семестр), чтобы ограничить
+  // календарь аудитории и корректно подставить дату по умолчанию.
+  async function loadScheduleRange() {
+    try {
+      const response = await fetch('/api/schedule-range', { cache: 'no-store' });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data && data.min && data.max) {
+        roomScheduleRange = { min: data.min, max: data.max };
+      }
+    } catch (e) {
+      // некритично: календарь просто не будет ограничен диапазоном
+    }
   }
 
   function renderRoomCalendar() {
@@ -1588,6 +1628,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const selectedIso = roomDateInput.value;
     const monthName = firstDay.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+
+    // Навигация по календарю больше не ограничена диапазоном семестра —
+    // пользователь может листать любые месяцы и выбирать любую дату.
 
     let gridHtml = '<div class="grid grid-cols-7 gap-2 text-center text-[11px] font-semibold text-slate-700 dark:text-slate-200 mb-3">';
     ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].forEach(dayName => {
@@ -1602,24 +1645,27 @@ document.addEventListener("DOMContentLoaded", () => {
     for (let date = 1; date <= daysInMonth; date++) {
       const candidate = new Date(year, month, date);
       const iso = `${candidate.getFullYear()}-${String(candidate.getMonth() + 1).padStart(2, '0')}-${String(candidate.getDate()).padStart(2, '0')}`;
-      const isSelected = iso === selectedIso;
-      const isWeekend = candidate.getDay() === 0 || candidate.getDay() === 6;
-      const buttonClasses = isSelected
-        ? 'bg-primary text-white shadow-sm'
-        : isWeekend
-          ? 'bg-slate-200/80 text-slate-800 dark:bg-slate-800 dark:text-slate-200'
-          : 'bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-100';
-      gridHtml += `<button type="button" data-day="${iso}" class="h-10 rounded-2xl font-semibold ${buttonClasses} hover:bg-primary/10 hover:text-primary dark:hover:bg-slate-700 transition-all">${date}</button>`;
+       const isSelected = iso === selectedIso;
+       const isWeekend = candidate.getDay() === 0 || candidate.getDay() === 6;
+       const buttonClasses = isSelected
+         ? 'bg-primary text-white shadow-sm'
+         : isWeekend
+           ? 'bg-slate-200/80 text-slate-800 dark:bg-slate-800 dark:text-slate-200'
+           : 'bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-100';
+       gridHtml += `<button type="button" data-day="${iso}" class="h-10 rounded-2xl font-semibold ${buttonClasses} hover:bg-primary/10 hover:text-primary dark:hover:bg-slate-700 transition-all">${date}</button>`;
     }
     gridHtml += '</div>';
 
+    const prevAttrs = 'class="rounded-2xl p-2 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"';
+    const nextAttrs = 'class="rounded-2xl p-2 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"';
+
     roomCalendar.innerHTML = `
       <div class="flex items-center justify-between mb-4">
-        <button type="button" id="room-calendar-prev" class="rounded-2xl p-2 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors">
+        <button type="button" id="room-calendar-prev" ${prevAttrs}>
           <span class="material-symbols-outlined">chevron_left</span>
         </button>
         <div class="text-sm font-semibold text-slate-800 dark:text-slate-100">${monthName}</div>
-        <button type="button" id="room-calendar-next" class="rounded-2xl p-2 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors">
+        <button type="button" id="room-calendar-next" ${nextAttrs}>
           <span class="material-symbols-outlined">chevron_right</span>
         </button>
       </div>
@@ -1629,6 +1675,7 @@ document.addEventListener("DOMContentLoaded", () => {
     roomCalendar.querySelectorAll('[data-day]').forEach(button => {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
+        if (button.disabled) return;
         setRoomDate(button.dataset.day);
         hideRoomCalendar();
       });
@@ -1656,7 +1703,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function showRoomCalendar() {
     if (!roomDateInput.value) {
-      setRoomDate(todayISO());
+      setRoomDate(defaultRoomDate());
     }
     renderRoomCalendar();
     roomCalendar.classList.remove('hidden');
@@ -1857,8 +1904,10 @@ document.addEventListener("DOMContentLoaded", () => {
       };
     } else if (isRoomTab) {
       const audience = roomInput.value.trim();
+      // Дата по умолчанию — сегодняшняя (актуальная). Календарь больше не
+      // ограничен диапазоном семестра, поэтому берём сегодня, если дата
+      // ещё не выбрана пользователем.
       let date = roomDateInput.value || todayISO();
-      if (!date) date = todayISO();
       if (!audience) {
         showError("Пожалуйста, введите номер аудитории.");
         return;
@@ -1876,6 +1925,25 @@ document.addEventListener("DOMContentLoaded", () => {
         const response = await fetch(`/api/schedule?audience=${encodeURIComponent(audience)}&date=${encodeURIComponent(date)}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const json = await response.json();
+
+        // Сервер ещё собирает полную копию расписания аудиторий —
+        // повторяем запрос через 5 секунд (с ограничением числа попыток).
+        if (json.isBuilding) {
+          if (roomBuildingRetries < ROOM_BUILD_MAX_RETRIES) {
+            roomBuildingRetries++;
+            scheduleContainer.innerHTML = `
+              <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-xl border border-outline-variant/10 dark:border-slate-800 p-8 text-center text-on-surface-variant/60 font-semibold flex flex-col items-center gap-3">
+                <span class="material-symbols-outlined text-4xl text-slate-400 animate-pulse">hourglass_top</span>
+                <span>Идёт загрузка полного расписания аудиторий. Попробуйте через несколько секунд…</span>
+              </div>`;
+            setTimeout(() => getSchedule(false), 5000);
+          } else {
+            showError("Не удалось дождаться сборки расписания аудиторий. Попробуйте позже.");
+          }
+          return;
+        }
+        roomBuildingRetries = 0;
+
         // Бэкенд возвращает { data: [...], isFallback: bool, savedAt? }
         const payload = json.data ?? json;
         renderRoomSchedule(payload, audience, date, shouldScroll);
