@@ -1675,11 +1675,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Сервер может не фильтровать по подстроке (studhub отдаёт все сразу),
   // поэтому отбираем совпадения на клиенте по введённому запросу.
+  let audienceBuildRetries = 0;
+  const MAX_AUDIENCE_RETRIES = 30; // максимум 30 ретраев (по 2 сек = ~1 минута)
+
   async function fetchAudiences(q) {
     try {
       const response = await fetch(`/api/audiences?q=${encodeURIComponent(q || '')}`, { cache: 'no-store' });
+      if (response.status === 503) {
+        // Сервер ещё собирает данные
+        const body = await response.json().catch(() => ({}));
+        if (body.building) {
+          console.warn('Сервер собирает полное расписание аудиторий, ждём...');
+          return { building: true, message: body.message || 'Идёт загрузка...' };
+        }
+        throw new Error(body.message || `HTTP ${response.status}`);
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+      audienceBuildRetries = 0;
       const all = normalizeAudienceList(data);
       const query = (q || '').trim().toLowerCase();
       if (!query) return sortAudiences(all);
@@ -1712,7 +1725,14 @@ document.addEventListener("DOMContentLoaded", () => {
     // При открытии режима аудитории подгружаем все варианты (для возможности
     // быстрого выбора без ввода).
     const list = await fetchAudiences('');
-    allAudiences = list;
+    if (list && list.building) {
+      // Сервер ещё собирает полное расписание — повторим через 2 секунды
+      console.warn('[Audiences] Сервер собирает данные, повторная попытка через 2с...');
+      allAudiences = []; // временно пустой список
+      setTimeout(() => loadAudiences(), 2000);
+    } else {
+      allAudiences = Array.isArray(list) ? list : [];
+    }
     setRoomDate(roomDateInput.value || todayISO());
   }
 
@@ -1723,7 +1743,20 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     const list = await fetchAudiences(value);
-    renderRoomDropdown(list);
+    if (list && list.building) {
+      // Сервер собирает данные — показываем то, что уже есть локально
+      const filtered = Array.isArray(allAudiences) 
+        ? allAudiences.filter(a => a.toLowerCase().includes(value.toLowerCase())) 
+        : [];
+      renderRoomDropdown(filtered);
+      // Повторная попытка через 2 секунды
+      if (audienceBuildRetries < MAX_AUDIENCE_RETRIES) {
+        audienceBuildRetries++;
+        setTimeout(() => filterAudiences(), 2000);
+      }
+    } else {
+      renderRoomDropdown(list);
+    }
   }
 
   function renderRoomPrompt(message) {

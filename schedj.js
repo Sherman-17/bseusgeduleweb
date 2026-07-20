@@ -1208,8 +1208,22 @@ app.get('/api/forms', async (req, res) => {
     try {
       const q = (req.query.q || '').trim().toLowerCase();
       const schedule = await ensureFullSchedule();
+      
+      // Если кэш ещё не готов
+      if (!schedule && !fullScheduleCache) {
+        if (!fullScheduleBuilding) {
+          buildFullSchedule().catch(e => console.error('[FullSchedule] Фоновая сборка:', e.message));
+        }
+        return res.status(503).json({ 
+          error: 'building', 
+          message: 'Идёт первичная загрузка расписания аудиторий. Попробуйте через минуту.',
+          building: true 
+        });
+      }
+      
+      const src = schedule || fullScheduleCache || [];
       const map = new Map();
-      for (const p of (schedule || [])) {
+      for (const p of src) {
         const full = p.audience;
         if (!full) continue;
         // Разделяем строку аудиторий по запятым и обрабатываем каждую отдельно
@@ -1252,7 +1266,7 @@ app.get('/api/forms', async (req, res) => {
     "12", "14", "13", "7", "2", "8", "534", "11", "263", "18",
     "129", "450", "530", "531", "497", "535", "432"
   ];
-  const FULL_SCHEDULE_INTERVAL = 10 * 60 * 1000; // 10 минут
+  const FULL_SCHEDULE_INTERVAL = 30 * 60 * 1000; // 30 минут
 
   // In-memory полная копия расписания: массив пар вида
   // { audience, audienceTokens:[...], dates:[...], subject, type, teacher, groupText, startTime, endTime }
@@ -1260,6 +1274,8 @@ app.get('/api/forms', async (req, res) => {
   let fullScheduleUpdatedAt = 0;
   let fullScheduleBuilding = false;
   let fullSchedulePromise = null;
+  let fullScheduleError = null;
+  let fullScheduleStartedAt = 0;
 
   // Кэш расписания по аудиториям: { "2/301": [{ subject, type, teacher, groupText, startTime, endTime, dates, audience, audienceTokens }, ...] }
   let audienceScheduleCache = {};
@@ -1279,6 +1295,44 @@ app.get('/api/forms', async (req, res) => {
   } catch (e) {
     console.warn('[Cache] Не удалось загрузить кэш из файла:', e.message);
   }
+  
+  // ===== Improved fetch with timeout =====
+  const FETCH_TIMEOUT = 15000;
+  async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      return response;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Request timed out after ${timeout}ms: ${url}`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  
+  // ===== Health check endpoint для Render =====
+  app.get('/api/status', (req, res) => {
+    res.json({
+      status: 'ok',
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      fullSchedule: {
+        hasCache: !!fullScheduleCache,
+        entries: fullScheduleCache ? fullScheduleCache.length : 0,
+        building: fullScheduleBuilding,
+        updatedAt: fullScheduleUpdatedAt,
+        startedAt: fullScheduleStartedAt,
+        error: fullScheduleError,
+        buildingTime: fullScheduleStartedAt ? Math.floor((Date.now() - fullScheduleStartedAt) / 1000) + 's' : null
+      },
+      nodeVersion: process.version,
+      timestamp: Date.now()
+    });
+  });
 
   // Получить все группы факультета (каскад форма -> курс -> группа)
   async function getFacultyGroups(faculty) {
@@ -1359,76 +1413,85 @@ app.get('/api/forms', async (req, res) => {
   async function buildFullSchedule() {
     if (fullScheduleBuilding) return fullSchedulePromise;
     fullScheduleBuilding = true;
+    fullScheduleError = null;
+    fullScheduleStartedAt = Date.now();
     fullSchedulePromise = (async () => {
       console.log('[FullSchedule] Начинаем сборку полной копии расписания...');
       const t0 = Date.now();
 
-      // 1. Собрать все группы всех факультетов параллельно
+      // 1. Собрать все группы всех факультетов параллельно (allSettled)
       let allGroups = [];
-      const groupLists = await Promise.all(BSEU_FACULTIES.map(fac =>
+      const groupResults = await Promise.allSettled(BSEU_FACULTIES.map(fac =>
         getFacultyGroups(fac).catch(e => {
           console.warn(`[FullSchedule] Факультет ${fac}: ${e.message}`);
           return [];
         })
       ));
-      groupLists.forEach(list => { allGroups = allGroups.concat(list); });
+      groupResults.forEach(result => {
+        if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+          allGroups = allGroups.concat(result.value);
+        }
+      });
 
       // 2. Загрузить расписания групп параллельно пачками и развернуть пары по датам
-      const CONCURRENCY = 30;
+      const CONCURRENCY = 15;
       const all = [];
-      for (let i = 0; i < allGroups.length; i += CONCURRENCY) {
-        const batch = allGroups.slice(i, i + CONCURRENCY);
-        const results = await Promise.all(batch.map(async (g) => {
-          try {
-            const body = `__act=__id.25.main.inpFldsA.GetSchedule__sp.7.results__fp.4.main&faculty=${g.faculty}&form=${g.form}&course=${g.course}&group=${g.group}&period=3`;
-            const gkey = `group:${g.faculty}:${g.form}:${g.course}:${g.group}`;
-            const sched = await getScheduleWithCache(gkey, body);
-            return { sched, g };
-          } catch (e) {
-            return null;
-          }
-        }));
-        for (const r of results) {
-          if (!r) continue;
-          const { sched, g } = r;
-          const lessons = sched.lessons || [];
-          const semStart = sched.semesterStartDate;
-          for (const l of lessons) {
-            const weeks = parseWeeks(l.weeks);
-            const dates = [];
-            for (const w of weeks) {
-              const d = lessonDate(semStart, l.day, w);
-              if (d) dates.push(d);
+      if (allGroups.length > 0) {
+        for (let i = 0; i < allGroups.length; i += CONCURRENCY) {
+          const batch = allGroups.slice(i, i + CONCURRENCY);
+          const results = await Promise.allSettled(batch.map(async (g) => {
+            try {
+              const body = `__act=__id.25.main.inpFldsA.GetSchedule__sp.7.results__fp.4.main&faculty=${g.faculty}&form=${g.form}&course=${g.course}&group=${g.group}&period=3`;
+              const gkey = `group:${g.faculty}:${g.form}:${g.course}:${g.group}`;
+              const sched = await getScheduleWithCache(gkey, body);
+              return { sched, g };
+            } catch (e) {
+              return null;
             }
-            if (!dates.length) continue;
-            // Пропускаем записи, где аудитория не валидна (содержит фамилии преподавателей и т.п.)
-            if (!l.room) continue;
-            // Проверяем, что все части (разделённые запятыми) содержат цифры
-            const roomStr = String(l.room).trim();
-            const roomParts = roomStr.split(',').map(p => p.trim());
-            const allValid = roomParts.every(part => /\d/.test(part));
-            if (!allValid) continue;
-            const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
-            const entry = {
-              audience: l.room,
-              audienceTokens: audienceTokens(l.room),
-              dates,
-              subject: l.subject,
-              type: l.type,
-              teacher: l.teacher || '',
-              groupText: g.groupText,
-              startTime: start || '',
-              endTime: end || ''
-            };
-            all.push(entry);
-            
-            // Заполняем кэш по аудиториям
-            if (l.room) {
-              if (!audienceScheduleCache[l.room]) {
-                audienceScheduleCache[l.room] = [];
+          }));
+          for (const r of results) {
+            if (r.status !== 'fulfilled' || !r.value) continue;
+            const { sched, g } = r.value;
+            const lessons = sched.lessons || [];
+            const semStart = sched.semesterStartDate;
+            for (const l of lessons) {
+              const weeks = parseWeeks(l.weeks);
+              const dates = [];
+              for (const w of weeks) {
+                const d = lessonDate(semStart, l.day, w);
+                if (d) dates.push(d);
               }
-              audienceScheduleCache[l.room].push(entry);
+              if (!dates.length) continue;
+              if (!l.room) continue;
+              const roomStr = String(l.room).trim();
+              const roomParts = roomStr.split(',').map(p => p.trim());
+              const allValid = roomParts.every(part => /\d/.test(part));
+              if (!allValid) continue;
+              const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
+              const entry = {
+                audience: l.room,
+                audienceTokens: audienceTokens(l.room),
+                dates,
+                subject: l.subject,
+                type: l.type,
+                teacher: l.teacher || '',
+                groupText: g.groupText,
+                startTime: start || '',
+                endTime: end || ''
+              };
+              all.push(entry);
+              
+              if (l.room) {
+                if (!audienceScheduleCache[l.room]) {
+                  audienceScheduleCache[l.room] = [];
+                }
+                audienceScheduleCache[l.room].push(entry);
+              }
             }
+          }
+          // Небольшая задержка между батчами
+          if (i + CONCURRENCY < allGroups.length) {
+            await new Promise(resolve => setTimeout(resolve, 500));
           }
         }
       }
@@ -1436,6 +1499,7 @@ app.get('/api/forms', async (req, res) => {
       fullScheduleCache = all;
       fullScheduleUpdatedAt = Date.now();
       audienceScheduleUpdatedAt = Date.now();
+      fullScheduleError = null;
       
       // Сохраняем кэш в файл для последующего использования
       try {
@@ -1454,22 +1518,40 @@ app.get('/api/forms', async (req, res) => {
       fullScheduleBuilding = false;
       return all;
     })();
+    fullSchedulePromise.catch(e => {
+      console.error('[FullSchedule] Ошибка сборки:', e.message);
+      fullScheduleError = e.message;
+      fullScheduleBuilding = false;
+    });
     return fullSchedulePromise;
   }
 
   // Гарантировать, что полная копия готова (запустить сборку при необходимости)
   async function ensureFullSchedule() {
     if (fullScheduleCache) return fullScheduleCache;
-    return buildFullSchedule();
+    if (fullScheduleBuilding) return null;
+    buildFullSchedule().catch(e => console.error('[FullSchedule] Фоновая сборка:', e.message));
+    return null;
   }
 
   // Фильтрация уже готовой копии по аудитории и дате (мгновенно)
   async function getAudienceScheduleBseu(audience, date) {
     const targetAud = audience.trim();
     const schedule = await ensureFullSchedule();
-    if (!schedule) schedule = fullScheduleCache || [];
+    
+    if (!schedule && !fullScheduleCache) {
+      return { 
+        data: [], 
+        isFallback: false, 
+        isBuilding: true,
+        buildingStartedAt: fullScheduleStartedAt,
+        message: 'Идёт загрузка полного расписания аудиторий. Пожалуйста, подождите.'
+      };
+    }
+    
+    const src = schedule || fullScheduleCache || [];
 
-    const collected = schedule.filter(p =>
+    const collected = src.filter(p =>
       (p.audience === targetAud || p.audienceTokens.includes(targetAud)) && p.dates.includes(date)
     ).map(p => ({
       shortNameRU: p.subject,
