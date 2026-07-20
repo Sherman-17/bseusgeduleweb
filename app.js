@@ -1144,6 +1144,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 120);
   }
 
+  function formatGroupLabel(g) {
+    if (!g) return '';
+    const s = String(g).trim();
+    const idx = s.indexOf('|');
+    if (idx !== -1) {
+      const code = s.slice(0, idx).trim();
+      const spec = s.slice(idx + 1).trim();
+      if (spec) return `${code} "${spec}"`;
+    }
+    return s;
+  }
+
   function renderRoomSchedule(payload, selectedAudience, selectedDate, shouldScroll = true) {
     const root = Array.isArray(payload) ? payload[0] ?? null : payload;
     const days = root?.scheduleOnDays ?? [];
@@ -1169,7 +1181,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const subject = lesson.shortNameRU || lesson.fullNameRU || lesson.subject || 'Без названия';
         const type = lesson.lessonTypeShortNameRU || lesson.lessonTypeNameRU || lesson.type || 'Занятие';
         const teachers = Array.isArray(lesson.teachers) && lesson.teachers.length ? lesson.teachers.join(', ') : (lesson.teacher || '—');
-        const groups = Array.isArray(lesson.groups) && lesson.groups.length ? lesson.groups.join(', ') : (lesson.group || '—');
+        const groups = Array.isArray(lesson.groups) && lesson.groups.length
+          ? lesson.groups.map(formatGroupLabel).join(', ')
+          : (lesson.group ? formatGroupLabel(lesson.group) : '—');
         const room = lesson.audience || selectedAudience || '—';
         const start = fmtTime(lesson.startTime || lesson.time?.split('-')[0]);
         const end = fmtTime(lesson.endTime || lesson.time?.split('-')[1]);

@@ -855,6 +855,24 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     return iconv.decode(buffer, charset);
   }
 
+  // ===== Improved fetch with timeout =====
+  const FETCH_TIMEOUT = 15000;
+  async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      return response;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Request timed out after ${timeout}ms: ${url}`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function fetchBseuList(action, params = {}) {
     const cacheKey = `list:${action}:${JSON.stringify(params)}`;
     const cached = fileGetCache(cacheKey);
@@ -876,7 +894,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     const bodyString = bodyParts.join("&");
 
     try {
-      const response = await fetch("https://bseu.by/schedule/", {
+      const response = await fetchWithTimeout("https://bseu.by/schedule/", {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded; charset=windows-1251",
@@ -1007,6 +1025,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
             
             const teacherSpan = contentCell.find('.teacher, .teacher.dd');
             teacher = teacherSpan.length ? teacherSpan.text().trim() : '';
+            if (!teacher) teacher = extractTeacherFromCell(contentCell);
             
             const clone = contentCell.clone();
             clone.find('.distype').remove();
@@ -1266,7 +1285,7 @@ app.get('/api/forms', async (req, res) => {
     "12", "14", "13", "7", "2", "8", "534", "11", "263", "18",
     "129", "450", "530", "531", "497", "535", "432"
   ];
-  const FULL_SCHEDULE_INTERVAL = 30 * 60 * 1000; // 30 минут
+  const FULL_SCHEDULE_INTERVAL = 10 * 60 * 1000; // Каждые 10 минут: сверяем расписание с BSEU
 
   // In-memory полная копия расписания: массив пар вида
   // { audience, audienceTokens:[...], dates:[...], subject, type, teacher, groupText, startTime, endTime }
@@ -1294,24 +1313,6 @@ app.get('/api/forms', async (req, res) => {
     }
   } catch (e) {
     console.warn('[Cache] Не удалось загрузить кэш из файла:', e.message);
-  }
-  
-  // ===== Improved fetch with timeout =====
-  const FETCH_TIMEOUT = 15000;
-  async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-    try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
-      return response;
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        throw new Error(`Request timed out after ${timeout}ms: ${url}`);
-      }
-      throw error;
-    } finally {
-      clearTimeout(timer);
-    }
   }
   
   // ===== Health check endpoint для Render =====
@@ -1408,8 +1409,55 @@ app.get('/api/forms', async (req, res) => {
     return tokens;
   }
 
+  // Извлечение преподавателя из ячейки пары. BSEU хранит имя в разных
+  // вариантах (span.teacher, span.teacher.dd, a.teacher, любой элемент с
+  // классом "teacher" внутри), а иногда — просто текстом "Фамилия И.О.".
+  function extractTeacherFromCell(contentCell) {
+    if (!contentCell || !contentCell.length) return '';
+    let t = '';
+    const sel = contentCell.find('.teacher, a.teacher, span[class*="teacher"], b.teacher');
+    if (sel.length) t = sel.first().text().trim();
+    if (!t) {
+      contentCell.find('*').each(function () {
+        const cls = ($(this).attr('class') || '').toLowerCase();
+        if (cls.includes('teacher')) { t = $(this).text().trim(); return false; }
+      });
+    }
+    if (!t) {
+      // Запасной вариант: "Фамилия И.И." или "Фамилия И И" внутри ячейки
+      const txt = contentCell.text() || '';
+      const m = txt.match(/([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2})/);
+      if (m) t = m[1].trim();
+    }
+    return t;
+  }
+
+  // Преобразование времени "ЧЧ:ММ" в минуты для надёжной сортировки
+  function timeToMinutes(t) {
+    if (!t) return 99999;
+    const m = String(t).match(/(\d{1,2})[:.](\d{2})/);
+    if (!m) return 99999;
+    return Number(m[1]) * 60 + Number(m[2]);
+  }
+
   // Собрать полную копию расписания всех групп всех факультетов.
   // Возвращает массив пар, каждая с готовыми датами (strings) и токенами аудитории.
+  // Компактная подпись расписания для сверки с предыдущей копией.
+  function scheduleSignature(entries) {
+    if (!Array.isArray(entries) || !entries.length) return '';
+    const parts = entries.map(e => [
+      (e.subject || '').trim().toLowerCase(),
+      (e.type || '').trim().toLowerCase(),
+      (e.teacher || '').trim().toLowerCase(),
+      (e.groupText || '').trim().toLowerCase(),
+      (e.audience || '').trim(),
+      (e.startTime || ''),
+      (e.endTime || ''),
+      (e.dates || []).slice().sort().join(',')
+    ].join('|')).sort();
+    return parts.join(';');
+  }
+
   async function buildFullSchedule() {
     if (fullScheduleBuilding) return fullSchedulePromise;
     fullScheduleBuilding = true;
@@ -1496,25 +1544,32 @@ app.get('/api/forms', async (req, res) => {
         }
       }
 
-      fullScheduleCache = all;
-      fullScheduleUpdatedAt = Date.now();
-      audienceScheduleUpdatedAt = Date.now();
-      fullScheduleError = null;
-      
-      // Сохраняем кэш в файл для последующего использования
-      try {
-        fs.writeFileSync(CACHE_FILE, JSON.stringify({
-          fullScheduleCache,
-          audienceScheduleCache,
-          updatedAt: fullScheduleUpdatedAt,
-          audienceScheduleUpdatedAt
-        }, null, 2));
-        console.log('[Cache] Кэш сохранён в файл:', CACHE_FILE);
-      } catch (e) {
-        console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
+      // === Сверка с предыдущей копией расписания ===
+      const newSignature = scheduleSignature(all);
+      const oldSignature = scheduleSignature(fullScheduleCache);
+      const changed = !fullScheduleCache || newSignature !== oldSignature;
+
+      if (changed) {
+        fullScheduleCache = all;
+        fullScheduleUpdatedAt = Date.now();
+        audienceScheduleUpdatedAt = Date.now();
+        fullScheduleError = null;
+        try {
+          fs.writeFileSync(CACHE_FILE, JSON.stringify({
+            fullScheduleCache,
+            audienceScheduleCache,
+            updatedAt: fullScheduleUpdatedAt,
+            audienceScheduleUpdatedAt
+          }, null, 2));
+          console.log('[Cache] Расписание изменилось — кэш обновлён и сохранён в файл:', CACHE_FILE);
+        } catch (e) {
+          console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
+        }
+      } else {
+        console.log('[Cache] Изменений в расписании BSEU нет — оставляем прежний кэш.');
       }
       
-      console.log(`[FullSchedule] Готово: ${all.length} пар, ${allGroups.length} групп, за ${((Date.now() - t0) / 1000).toFixed(1)} с`);
+      console.log(`[FullSchedule] Готово: ${all.length} пар, ${allGroups.length} групп, за ${((Date.now() - t0) / 1000).toFixed(1)} с; изменения: ${changed ? 'да' : 'нет'}`);
       fullScheduleBuilding = false;
       return all;
     })();
@@ -1551,19 +1606,39 @@ app.get('/api/forms', async (req, res) => {
     
     const src = schedule || fullScheduleCache || [];
 
-    const collected = src.filter(p =>
-      (p.audience === targetAud || p.audienceTokens.includes(targetAud)) && p.dates.includes(date)
-    ).map(p => ({
-      shortNameRU: p.subject,
-      lessonTypeShortNameRU: p.type,
-      teachers: p.teacher ? [p.teacher] : [],
-      groups: [p.groupText],
-      audience: p.audience,
-      startTime: p.startTime,
-      endTime: p.endTime
-    }));
+    // Объединяем карточки одной и той же пары (один предмет, тип, время и
+    // преподаватель), идущей у нескольких групп одновременно (например, лекция),
+    // в одну карточку со списком всех групп.
+    const keyOf = (p) =>
+      `${(p.subject || '').trim().toLowerCase()}|` +
+      `${(p.type || '').trim().toLowerCase()}|` +
+      `${(p.startTime || '').trim()}|` +
+      `${(p.endTime || '').trim()}|` +
+      `${(p.teacher || '').trim().toLowerCase()}`;
+    const byKey = new Map();
+    for (const p of src) {
+      if (!((p.audience === targetAud || p.audienceTokens.includes(targetAud)) && p.dates.includes(date))) continue;
+      const k = keyOf(p);
+      let card = byKey.get(k);
+      if (!card) {
+        card = {
+          shortNameRU: p.subject,
+          lessonTypeShortNameRU: p.type,
+          teachers: p.teacher ? [p.teacher] : [],
+          groups: [],
+          audience: p.audience,
+          startTime: p.startTime,
+          endTime: p.endTime
+        };
+        byKey.set(k, card);
+      }
+      if (p.groupText && !card.groups.includes(p.groupText)) {
+        card.groups.push(p.groupText);
+      }
+    }
+    const collected = Array.from(byKey.values());
 
-    collected.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    collected.sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
 
     let dayNameRU = '';
     try {

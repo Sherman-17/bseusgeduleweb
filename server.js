@@ -172,6 +172,25 @@ function fileSetCache(key, value) {
   } catch (e) { /* ignore */ }
 }
 
+// ===== Improved fetch with timeout =====
+const FETCH_TIMEOUT = 15000; // 15 секунд таймаут для всех запросов
+
+async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeout}ms: ${url}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ===== BSEU schedule engine (same as schedj.js) =====
 function toWin1251Url(str) {
   const buf = iconv.encode(str, 'win1251');
@@ -200,25 +219,6 @@ function decodeResponseBuffer(buffer, response) {
     }
   }
   return iconv.decode(buffer, charset);
-}
-
-// ===== Improved fetch with timeout =====
-const FETCH_TIMEOUT = 15000; // 15 секунд таймаут для всех запросов
-
-async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    return response;
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error(`Request timed out after ${timeout}ms: ${url}`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function fetchBseuList(action, params = {}) {
@@ -332,6 +332,7 @@ function parseScheduleHtml(html) {
           type = distypeSpan.length ? distypeSpan.text().replace(/[()]/g, '').trim() : '';
           const teacherSpan = contentCell.find('.teacher, .teacher.dd');
           teacher = teacherSpan.length ? teacherSpan.text().trim() : '';
+          if (!teacher) teacher = extractTeacherFromCell(contentCell);
           const clone = contentCell.clone();
           clone.find('.distype').remove();
           clone.find('.teacher, .teacher.dd').remove();
@@ -414,7 +415,7 @@ app.use(express.static(__dirname));
 // ===== Список аудиторий (реальные номера "корпус/аудитория" из полного расписания BSEU) =====
 // ===== Расписание аудитории: полная копия расписания БГЭУ =====
 const BSEU_FACULTIES = ["12","14","13","7","2","8","534","11","263","18","129","450","530","531","497","535","432"];
-const FULL_SCHEDULE_INTERVAL = 30 * 60 * 1000; // Каждые 30 минут (вместо 10)
+const FULL_SCHEDULE_INTERVAL = 10 * 60 * 1000; // Каждые 10 минут: сверяем расписание с BSEU
 let fullScheduleCache = null;
 let fullScheduleUpdatedAt = 0;
 let fullScheduleBuilding = false;
@@ -503,6 +504,54 @@ function audienceTokens(room) {
   return tokens;
 }
 
+// Извлечение преподавателя из ячейки пары. BSEU хранит имя в разных
+// вариантах (span.teacher, span.teacher.dd, a.teacher, любой элемент с
+// классом "teacher" внутри), а иногда — просто текстом "Фамилия И.О.".
+function extractTeacherFromCell(contentCell) {
+  if (!contentCell || !contentCell.length) return '';
+  let t = '';
+  const sel = contentCell.find('.teacher, a.teacher, span[class*="teacher"], b.teacher');
+  if (sel.length) t = sel.first().text().trim();
+  if (!t) {
+    contentCell.find('*').each(function () {
+      const cls = ($(this).attr('class') || '').toLowerCase();
+      if (cls.includes('teacher')) { t = $(this).text().trim(); return false; }
+    });
+  }
+  if (!t) {
+    // Запасной вариант: "Фамилия И.И." или "Фамилия И И" внутри ячейки
+    const txt = contentCell.text() || '';
+    const m = txt.match(/([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2})/);
+    if (m) t = m[1].trim();
+  }
+  return t;
+}
+
+// Преобразование времени "ЧЧ:ММ" в минуты для надёжной сортировки
+function timeToMinutes(t) {
+  if (!t) return 99999;
+  const m = String(t).match(/(\d{1,2})[:.](\d{2})/);
+  if (!m) return 99999;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// Компактная подпись расписания для сверки с предыдущей копией.
+// Учитывает только значимые поля каждой пары (без дублей по аудиториям).
+function scheduleSignature(entries) {
+  if (!Array.isArray(entries) || !entries.length) return '';
+  const parts = entries.map(e => [
+    (e.subject||'').trim().toLowerCase(),
+    (e.type||'').trim().toLowerCase(),
+    (e.teacher||'').trim().toLowerCase(),
+    (e.groupText||'').trim().toLowerCase(),
+    (e.audience||'').trim(),
+    (e.startTime||''),
+    (e.endTime||''),
+    (e.dates||[]).slice().sort().join(',')
+  ].join('|')).sort();
+  return parts.join(';');
+}
+
 async function buildFullSchedule() {
   if (fullScheduleBuilding) return fullSchedulePromise;
   fullScheduleBuilding = true;
@@ -586,24 +635,34 @@ async function buildFullSchedule() {
         }
       }
     }
-    fullScheduleCache = all;
-    fullScheduleUpdatedAt = Date.now();
-    fullScheduleError = null;
-    
-    // Сохраняем кэш в файл для последующего использования
-    try {
-      fs.writeFileSync(CACHE_FILE, JSON.stringify({
-        fullScheduleCache,
-        audienceScheduleCache,
-        updatedAt: fullScheduleUpdatedAt,
-        audienceScheduleUpdatedAt
-      }, null, 2));
-      console.log('[Cache] Кэш сохранён в файл:', CACHE_FILE);
-    } catch (e) {
-      console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
+    // === Сверка с предыдущей копией расписания ===
+    // Считаем компактную подпись новой копии и сравниваем с предыдущей.
+    // Если изменений нет — оставляем старый кэш (и время его обновления),
+    // чтобы не перезаписывать файл и не "дёргать" клиентов без причины.
+    const newSignature = scheduleSignature(all);
+    const oldSignature = scheduleSignature(fullScheduleCache);
+    const changed = !fullScheduleCache || newSignature !== oldSignature;
+
+    if (changed) {
+      fullScheduleCache = all;
+      fullScheduleUpdatedAt = Date.now();
+      fullScheduleError = null;
+      try {
+        fs.writeFileSync(CACHE_FILE, JSON.stringify({
+          fullScheduleCache,
+          audienceScheduleCache,
+          updatedAt: fullScheduleUpdatedAt,
+          audienceScheduleUpdatedAt
+        }, null, 2));
+        console.log('[Cache] Расписание изменилось — кэш обновлён и сохранён в файл:', CACHE_FILE);
+      } catch (e) {
+        console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
+      }
+    } else {
+      console.log('[Cache] Изменений в расписании BSEU нет — оставляем прежний кэш.');
     }
     
-    console.log(`[FullSchedule] Готово: ${all.length} пар, ${allGroups.length} групп, за ${((Date.now() - t0) / 1000).toFixed(1)} с`);
+    console.log(`[FullSchedule] Готово: ${all.length} пар, ${allGroups.length} групп, за ${((Date.now() - t0) / 1000).toFixed(1)} с; изменения: ${changed ? 'да' : 'нет'}`);
     fullScheduleBuilding = false;
     return all;
   })();
@@ -649,18 +708,41 @@ async function getAudienceScheduleBseu(audience, date) {
   }
   
   const src = schedule || fullScheduleCache || [];
-  const collected = src.filter(p =>
+  const matched = src.filter(p =>
     (p.audience === targetAud || p.audienceTokens.includes(targetAud)) && p.dates.includes(date)
-  ).map(p => ({
-    shortNameRU: p.subject,
-    lessonTypeShortNameRU: p.type,
-    teachers: p.teacher ? [p.teacher] : [],
-    groups: [p.groupText],
-    audience: p.audience,
-    startTime: p.startTime,
-    endTime: p.endTime
-  }));
-  collected.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+  );
+
+  // Объединяем карточки одной и той же пары (один предмет, тип, время и
+  // преподаватель), идущей у нескольких групп одновременно (например, лекция),
+  // в одну карточку со списком всех групп.
+  const keyOf = (p) =>
+    `${(p.subject || '').trim().toLowerCase()}|` +
+    `${(p.type || '').trim().toLowerCase()}|` +
+    `${(p.startTime || '').trim()}|` +
+    `${(p.endTime || '').trim()}|` +
+    `${(p.teacher || '').trim().toLowerCase()}`;
+  const byKey = new Map();
+  for (const p of matched) {
+    const k = keyOf(p);
+    let card = byKey.get(k);
+    if (!card) {
+      card = {
+        shortNameRU: p.subject,
+        lessonTypeShortNameRU: p.type,
+        teachers: p.teacher ? [p.teacher] : [],
+        groups: [],
+        audience: p.audience,
+        startTime: p.startTime,
+        endTime: p.endTime
+      };
+      byKey.set(k, card);
+    }
+    if (p.groupText && !card.groups.includes(p.groupText)) {
+      card.groups.push(p.groupText);
+    }
+  }
+  const collected = Array.from(byKey.values());
+  collected.sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
   let dayNameRU = '';
   try { dayNameRU = new Date(date + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'long' }); } catch (e) {}
   const payload = [{ scheduleOnDays: [{ id: 0, date: date + 'T00:00:00', dayNameRU, week: 0, lessons: collected }] }];
@@ -816,16 +898,15 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   if (fullScheduleCache) {
     console.log(`[Cache] Загружен кэш с ${fullScheduleCache.length} записями.`);
   } else {
-    console.warn('[Cache] Кэш не загружен. Сборка будет запущена при первом запросе к аудиториям.');
+    // На Render (и локально) сразу запускаем сборку полного расписания,
+    // чтобы режим "по аудитории" работал без ожидания первого запроса.
+    console.warn('[Cache] Кэш не загружен. Запускаем начальную сборку полного расписания...');
+    buildFullSchedule().catch(e => console.error('[FullSchedule] Ошибка начальной сборки:', e.message));
   }
   
-  // Периодическая сборка: запускаем только если есть кэш (чтобы обновлять его)
+  // Периодическая сборка для обновления кэша
   setInterval(() => {
-    // Запускаем сборку только если есть хоть какой-то кэш
-    // чтобы не запускать сборку каждые 30 минут, если она никогда не была успешна
-    if (fullScheduleCache || !fullScheduleError) {
-      buildFullSchedule().catch(e => console.error('[FullSchedule] Ошибка периодической сборки:', e.message));
-    }
+    buildFullSchedule().catch(e => console.error('[FullSchedule] Ошибка периодической сборки:', e.message));
   }, FULL_SCHEDULE_INTERVAL);
 });
 
