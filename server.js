@@ -296,9 +296,15 @@ function parseScheduleHtml(html) {
       const currentWeekNum = Number(weekMatch[1]);
       currentSemesterWeek = currentWeekNum;
       const today = new Date();
-      const day = today.getUTCDay();
-      const diff = today.getUTCDate() - day + (day === 0 ? -6 : 1);
-      const monday = new Date(Date.UTC(today.getFullYear(), today.getUTCMonth(), today.getUTCDate() + diff));
+      // BSEU считает учебную неделю по часовому поясу Europe/Minsk (UTC+3),
+      // а не по UTC сервера. На сервере в UTC (Render) на границе недели
+      // getUTCDay() указывает на предыдущий понедельник, и старт семестра
+      // съезжает ровно на неделю (расписание «на неделю раньше»). Сдвигаем
+      // «сейчас» на +3ч, чтобы граница недели совпадала с поясом BSEU.
+      const shifted = new Date(today.getTime() + 3 * 60 * 60 * 1000);
+      const day = shifted.getUTCDay();
+      const diff = shifted.getUTCDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate() + diff));
       const sd = new Date(monday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
       semesterStartDate = normalizeSemesterStart(sd.toISOString().slice(0, 10));
     } else {
@@ -620,6 +626,7 @@ async function buildFullSchedule() {
 
     const CONCURRENCY = 15; // Уменьшаем concurrency с 30 до 15
     const all = [];
+    const fetched = [];
     // Собираем только если есть группы
     if (allGroups.length > 0) {
       for (let i = 0; i < allGroups.length; i += CONCURRENCY) {
@@ -634,43 +641,7 @@ async function buildFullSchedule() {
         }));
         for (const r of results) {
           if (r.status !== 'fulfilled' || !r.value) continue;
-          const { sched, g } = r.value;
-          const lessons = sched.lessons || [];
-          const semStart = sched.semesterStartDate;
-          for (const l of lessons) {
-            const weeks = parseWeeks(l.weeks);
-            const dates = [];
-            for (const w of weeks) {
-              const d = lessonDate(semStart, l.day, w);
-              if (d) dates.push(d);
-            }
-            if (!dates.length) continue;
-            if (!l.room) continue;
-            const roomStr = String(l.room).trim();
-            const roomParts = roomStr.split(',').map(p => p.trim());
-            const allValid = roomParts.every(part => /\d/.test(part));
-            if (!allValid) continue;
-            const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
-            const entry = {
-              audience: l.room,
-              audienceTokens: audienceTokens(l.room),
-              dates,
-              subject: l.subject,
-              type: l.type,
-              teacher: l.teacher || '',
-              groupText: g.groupText,
-              startTime: start || '',
-              endTime: end || ''
-            };
-            all.push(entry);
-            
-            if (l.room) {
-              if (!audienceScheduleCache[l.room]) {
-                audienceScheduleCache[l.room] = [];
-              }
-              audienceScheduleCache[l.room].push(entry);
-            }
-          }
+          fetched.push(r.value);
         }
         // Небольшая задержка между батчами, чтобы не загружать сервер BSEU
         if (i + CONCURRENCY < allGroups.length) {
@@ -678,6 +649,60 @@ async function buildFullSchedule() {
         }
       }
     }
+
+    // Каноническая дата начала семестра — самая частая (мода) среди всех групп.
+    // Защищает от рассинхрона: если у части групп BSEU вернул старт семестра,
+    // сдвинутый на неделю (см. ветку «Текущая - N учебная неделя» в
+    // parseScheduleHtml на сервере в UTC), все пары кэша получат единую,
+    // корректную дату старта и не «уедут» на неделю относительно других групп.
+    const semCount = {};
+    for (const { sched } of fetched) {
+      const s = sched.semesterStartDate;
+      if (s) semCount[s] = (semCount[s] || 0) + 1;
+    }
+    let canonicalSemStart = null, maxCount = -1;
+    for (const s of Object.keys(semCount)) {
+      if (semCount[s] > maxCount) { maxCount = semCount[s]; canonicalSemStart = s; }
+    }
+
+    for (const { sched, g } of fetched) {
+      const lessons = sched.lessons || [];
+      const semStart = canonicalSemStart || sched.semesterStartDate;
+      for (const l of lessons) {
+        const weeks = parseWeeks(l.weeks);
+        const dates = [];
+        for (const w of weeks) {
+          const d = lessonDate(semStart, l.day, w);
+          if (d) dates.push(d);
+        }
+        if (!dates.length) continue;
+        if (!l.room) continue;
+        const roomStr = String(l.room).trim();
+        const roomParts = roomStr.split(',').map(p => p.trim());
+        const allValid = roomParts.every(part => /\d/.test(part));
+        if (!allValid) continue;
+        const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
+        const entry = {
+          audience: l.room,
+          audienceTokens: audienceTokens(l.room),
+          dates,
+          subject: l.subject,
+          type: l.type,
+          teacher: l.teacher || '',
+          groupText: g.groupText,
+          startTime: start || '',
+          endTime: end || ''
+        };
+        all.push(entry);
+        
+        if (l.room) {
+              if (!audienceScheduleCache[l.room]) {
+                audienceScheduleCache[l.room] = [];
+              }
+              audienceScheduleCache[l.room].push(entry);
+            }
+          }
+        }
     // === Сверка с предыдущей копией расписания ===
     // Считаем компактную подпись новой копии и сравниваем с предыдущей.
     // Если изменений нет — оставляем старый кэш (и время его обновления),
