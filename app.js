@@ -2226,7 +2226,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             <span class="text-xs font-semibold text-amber-700 dark:text-amber-300 block leading-relaxed break-words">${escapeHtml(hwText)}</span>
           </div>
         </div>`
-      : showHomeworkControls ? `<button type="button" class="hw-add-btn mt-2 text-[11px] font-semibold text-primary/70 dark:text-[#b5bcff]/70 hover:text-primary dark:hover:text-[#b5bcff] transition-colors flex items-center gap-1 cursor-pointer border border-dashed border-primary/20 dark:border-[#b5bcff]/20 rounded-lg px-2 py-1 hover:border-primary/40 dark:hover:border-[#b5bcff]/40">
+      : showHomeworkControls ? `<button type="button" class="hw-add-btn mt-2 text-[11px] font-semibold text-primary/70 dark:text-[#b5bcff]/70 hover:text-primary dark:hover:text-[#b5bcff] transition-colors inline-flex items-center gap-1 cursor-pointer border border-dashed border-primary/20 dark:border-[#b5bcff]/20 rounded-lg px-2 py-1 hover:border-primary/40 dark:hover:border-[#b5bcff]/40">
           <span class="material-symbols-outlined text-sm">add_task</span>
           <span>Добавить ДЗ</span>
         </button>` : '';

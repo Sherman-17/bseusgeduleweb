@@ -1182,7 +1182,14 @@
         .lesson-time-col {
           min-width: 48px !important;
           height: 100% !important;
-          justify-content: space-between !important;
+          justify-content: center !important;
+        }
+        /* Уменьшаем шрифты времени на мобильных */
+        .lesson-time-col > :first-child {
+          font-size: 1.1rem !important;
+        }
+        .lesson-time-col > :last-child {
+          font-size: 0.75rem !important;
         }
       }
 
