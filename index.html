@@ -1069,29 +1069,34 @@
     }
       .dark .time-field-trigger:focus-visible { outline-color: #9ea8fa; }
 
-      /* Переключатель посещаемости на карточке пары */
-      .lesson-card:has(> .att-toggle) .flex-grow {
-        padding-right: 44px;
-      }
-      /* Карточка пары: левая колонка с временем фиксированной ширины,
-         правая (flex-grow) — должна сжиматься, иначе длинное ДЗ
-         вываливается за правую границу карточки (overflow-hidden его обрезает) */
-      .lesson-card .flex-grow {
-        min-width: 0;
-      }
-      .lesson-card .homework-block {
-        min-width: 0;
-      }
-      .lesson-card .homework-block > div {
-        min-width: 0;
-      }
-      .att-toggle .att-state-btn:focus-visible {
-        outline: 2px solid #4f59a4;
-        outline-offset: -2px;
-        z-index: 1;
-        position: relative;
-      }
-      .dark .att-toggle .att-state-btn:focus-visible { outline-color: #9ea8fa; }
+       /* Переключатель посещаемости на карточке пары */
+       .lesson-card:has(> .att-toggle) .flex-grow {
+         padding-right: 44px;
+       }
+       /* Карточка пары: левая колонка с временем фиксированной ширины,
+          правая (flex-grow) — должна сжиматься, иначе длинное ДЗ
+          вываливается за правую границу карточки (overflow-hidden его обрезает) */
+       .lesson-card .flex-grow {
+         min-width: 0;
+       }
+       .lesson-card .homework-block {
+         min-width: 0;
+       }
+       .lesson-card .homework-block > div {
+         min-width: 0;
+       }
+       /* Время пары: растягиваем на всю высоту карточки */
+       .lesson-time-col {
+         height: 100%;
+         justify-content: space-between;
+       }
+       .att-toggle .att-state-btn:focus-visible {
+         outline: 2px solid #4f59a4;
+         outline-offset: -2px;
+         z-index: 1;
+         position: relative;
+       }
+       .dark .att-toggle .att-state-btn:focus-visible { outline-color: #9ea8fa; }
 
       /* Календарь выбора периода в панели пропусков */
       #absence-cal-grid {
@@ -1176,6 +1181,8 @@
         /* Уменьшаем минимальную ширину колонки времени */
         .lesson-time-col {
           min-width: 48px !important;
+          height: 100% !important;
+          justify-content: space-between !important;
         }
       }
 
@@ -2123,6 +2130,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>

@@ -1202,31 +1202,26 @@ document.addEventListener("DOMContentLoaded", async () => {
         const styles = getLessonStyles(type);
         const typeBadge = type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${type}</span>` : "";
         return `
-          <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card">
-            <div class="absolute top-0 left-0 w-1 h-full ${styles.border}"></div>
-            <div class="flex items-start justify-between">
+          <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card flex flex-col">
+      <div class="absolute top-0 left-0 w-0.5 h-full ${styles.border}"></div>
+             <div class="flex items-stretch justify-between h-full flex-grow">
               <div class="flex gap-6 w-full">
-                <div class="flex flex-col items-center min-w-[64px]">
-                  <span class="text-lg font-extrabold text-on-surface dark:text-white">${escapeHtml(start)}</span>
-                  <div class="w-[2px] h-8 bg-surface-container-highest dark:bg-slate-800 my-1"></div>
-                  <span class="text-xs font-semibold text-on-surface-variant/60 dark:text-slate-400">${escapeHtml(end)}</span>
+                 <div class="flex flex-col items-center min-w-[64px] lesson-time-col justify-center gap-2">
+                  <span class="text-2xl font-extrabold text-on-surface dark:text-white">${escapeHtml(startTime)}</span>
+                  <span class="text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400">${escapeHtml(endTime)}</span>
                 </div>
-                <div class="flex-grow">
-                  <div class="flex flex-wrap items-center gap-2 mb-2">
+                <div class="flex-grow flex flex-col">
+                  <div class="flex flex-wrap items-center gap-2 mb-2 lesson-meta-row">
                     ${typeBadge}
                     <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
                       <span class="material-symbols-outlined text-base">location_on</span>
                       <span>Ауд. ${escapeHtml(room)}</span>
                     </span>
                   </div>
-                  <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug">${escapeHtml(subject)}</h3>
-                  <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2">
-                    <span class="material-symbols-outlined text-base text-slate-400">person</span>
+                  <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${escapeHtml(subject)}</h3>
+                  <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
+                    <span class="material-symbols-outlined text-base text-slate-400">${lesson.isTeacher ? 'groups' : 'person'}</span>
                     <span>${escapeHtml(teachers)}</span>
-                  </p>
-                  <p class="text-on-surface-variant/70 dark:text-slate-400 font-semibold text-xs flex items-center gap-2 mt-1">
-                    <span class="material-symbols-outlined text-sm text-slate-400">groups</span>
-                    <span>${escapeHtml(groups)}</span>
                   </p>
                 </div>
               </div>
@@ -2201,7 +2196,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function buildLessonCard(l, showWeeks) {
     const styles = getLessonStyles(l.type);
     const card = document.createElement("div");
-    card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card";
+    card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card flex flex-col items-stretch";
     card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
     card._lesson = l;
     card.dataset.attKey = getAttendanceKey(l);
@@ -2222,8 +2217,8 @@ document.addEventListener("DOMContentLoaded", async () => {
           <div class="flex-1 min-w-0">
             <span class="text-xs font-semibold text-amber-700 dark:text-amber-300 block leading-relaxed break-words">${escapeHtml(hwText)}</span>
           </div>
-          <button type="button" class="hw-edit-btn shrink-0 mt-0.5 p-0.5 rounded-lg text-on-surface-variant/50 hover:text-primary dark:hover:text-[#b5bcff] transition-colors cursor-pointer" title="Редактировать ДЗ">
-            <span class="material-symbols-outlined text-sm">edit</span>
+          <button type="button" class="hw-edit-btn shrink-0 mt-0.5 p-1.5 rounded-lg text-amber-700/80 dark:text-amber-300/80 hover:text-amber-900 dark:hover:text-amber-100 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-all cursor-pointer" title="Редактировать ДЗ">
+            <span class="material-symbols-outlined text-base">edit</span>
           </button>
         </div>` : `<div class="homework-block mt-3 pt-3 border-t border-outline-variant/20 dark:border-slate-700/50 flex items-start gap-2">
           <span class="material-symbols-outlined text-sm shrink-0 mt-0.5 text-amber-600 dark:text-amber-400">assignment</span>
@@ -2237,15 +2232,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         </button>` : '';
 
     card.innerHTML = `
-      <div class="absolute top-0 left-0 w-1 h-full ${styles.border}"></div>
-      <div class="flex items-start justify-between">
+      <div class="absolute top-0 left-0 w-0.5 h-full ${styles.border}"></div>
+      <div class="flex items-stretch justify-between h-full flex-grow">
         <div class="flex gap-6 w-full">
-          <div class="flex flex-col items-center min-w-[64px] lesson-time-col">
-            <span class="text-lg font-extrabold text-on-surface dark:text-white">${startTime}</span>
-            <div class="w-[2px] h-8 bg-surface-container-highest dark:bg-slate-800 my-1"></div>
-            <span class="text-xs font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
-          </div>
-          <div class="flex-grow">
+                 <div class="flex flex-col items-center min-w-[64px] lesson-time-col justify-center gap-2">
+                   <span class="text-2xl font-extrabold text-on-surface dark:text-white">${escapeHtml(startTime)}</span>
+                   <span class="text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400">${escapeHtml(endTime)}</span>
+                 </div>
+          <div class="flex-grow flex flex-col">
             <div class="flex flex-wrap items-center gap-2 mb-2 lesson-meta-row">
               ${typeBadge}
               <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
@@ -2254,8 +2248,8 @@ document.addEventListener("DOMContentLoaded", async () => {
               </span>
               ${weeksBadge}
             </div>
-            <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug">${l.subject}</h3>
-            <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2">
+            <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${l.subject}</h3>
+            <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
               <span class="material-symbols-outlined text-base text-slate-400">${l.isTeacher ? 'groups' : 'person'}</span>
               <span>${l.teacher || '—'}</span>
             </p>
@@ -2499,7 +2493,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const card = document.createElement("div");
         const styles = getLessonStyles(l.type);
         
-        card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card";
+        card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card flex flex-col items-stretch";
         card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
         card._lesson = l;
         card.dataset.attKey = getAttendanceKey(l);
@@ -2513,17 +2507,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         card.innerHTML = `
           <!-- Левый вертикальный цветной индикатор типа пары -->
-          <div class="absolute top-0 left-0 w-1 h-full ${styles.border}"></div>
-          <div class="flex items-start justify-between">
+          <div class="absolute top-0 left-0 w-0.5 h-full ${styles.border}"></div>
+           <div class="flex items-stretch justify-between h-full flex-grow">
             <div class="flex gap-6 w-full">
               <!-- Блок времени -->
-              <div class="flex flex-col items-center min-w-[64px]">
-                <span class="text-lg font-extrabold text-on-surface dark:text-white">${startTime}</span>
-                <div class="w-[2px] h-8 bg-surface-container-highest dark:bg-slate-800 my-1"></div>
-                <span class="text-xs font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
-              </div>
+                  <div class="flex flex-col items-center min-w-[64px] lesson-time-col justify-center gap-2">
+                    <span class="text-2xl font-extrabold text-on-surface dark:text-white">${startTime}</span>
+                    <span class="text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
+                  </div>
               <!-- Блок информации о занятии -->
-              <div class="flex-grow">
+              <div class="flex-grow flex flex-col">
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   ${typeBadge}
                   <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
@@ -2531,9 +2524,8 @@ document.addEventListener("DOMContentLoaded", async () => {
                     <span>Ауд. ${l.room || '—'}</span>
                   </span>
                 </div>
-                </div>
-                <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug">${l.subject}</h3>
-                <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2">
+                <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${l.subject}</h3>
+                <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
                   <span class="material-symbols-outlined text-base text-slate-400">${l.isTeacher ? 'groups' : 'person'}</span>
                   <span>${l.teacher || '—'}</span>
                 </p>
@@ -2814,23 +2806,23 @@ document.addEventListener("DOMContentLoaded", async () => {
         const hours = calculateHours(shift.startTime, shift.endTime);
         const earn = (hours * job.rate).toFixed(2);
         const card = document.createElement('div');
-        card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border relative overflow-hidden group lesson-card";
+        card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border relative overflow-hidden group lesson-card flex flex-col";
         card.style.borderColor = job.color;
         card.innerHTML = `
           <div class="absolute top-0 left-0 w-1 h-full" style="background-color: ${job.color}"></div>
-          <div class="flex items-start justify-between">
-            <div class="flex gap-6 w-full">
-              <div class="flex flex-col items-center min-w-[64px]">
-                <span class="text-lg font-extrabold" style="color: ${job.color}">${shift.startTime}</span>
-                <div class="w-[2px] h-8 my-1" style="background-color: ${job.color}; opacity:.3"></div>
-                <span class="text-xs font-semibold text-on-surface-variant/60 dark:text-slate-400">${shift.endTime}</span>
-              </div>
-              <div class="flex-grow">
+           <div class="flex items-stretch justify-between h-full flex-grow">
+             <div class="flex gap-6 w-full">
+               <div class="flex flex-col items-center min-w-[64px] h-full lesson-time-col py-1 justify-between">
+                 <span class="text-lg font-extrabold flex-shrink-0" style="color: ${job.color}">${shift.startTime}</span>
+                 <div class="w-px flex-grow min-h-[8px]" style="background-color: ${job.color}; opacity:.3"></div>
+                 <span class="text-xs font-semibold text-on-surface-variant/60 dark:text-slate-400 flex-shrink-0">${shift.endTime}</span>
+               </div>
+              <div class="flex-grow flex flex-col">
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   <span class="text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded" style="background-color: ${job.color}; color: ${getContrastColor(job.color)}">Работа</span>
                 </div>
-                <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug">${escapeHtml(job.name)}</h3>
-                <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2">
+                <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${escapeHtml(job.name)}</h3>
+                <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
                   <span class="material-symbols-outlined text-base" style="color: ${job.color}">work</span>
                   <span>${hours.toFixed(1)} ч · ${earn} ${job.currency}</span>
                 </p>
@@ -3263,7 +3255,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const styles = getLessonStyles(l.type);
         
         const card = document.createElement("div");
-        card.className = `bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border ${styles.borderColor} shadow-sm relative overflow-hidden group lesson-card`;
+        card.className = `bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border ${styles.borderColor} shadow-sm relative overflow-hidden group lesson-card flex flex-col items-stretch`;
         card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
         card._lesson = l;
         card.dataset.attKey = getAttendanceKey(l);
@@ -3274,16 +3266,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         
         const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${l.type}</span>` : "";
 
-        card.innerHTML = `
-          <div class="absolute top-0 left-0 w-1 h-full ${styles.border}"></div>
-          <div class="flex items-start justify-between">
-            <div class="flex gap-6 w-full">
-              <div class="flex flex-col items-center min-w-[64px]">
-                <span class="text-lg font-extrabold text-on-surface dark:text-white">${startTime}</span>
-                <div class="w-[2px] h-8 bg-surface-container-highest dark:bg-slate-800 my-1"></div>
-                <span class="text-xs font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
-              </div>
-              <div class="flex-grow">
+card.innerHTML = `
+          <div class="absolute top-0 left-0 w-0.5 h-full ${styles.border}"></div>
+           <div class="flex items-stretch justify-between h-full flex-grow">
+             <div class="flex gap-6 w-full">
+                 <div class="flex flex-col items-center min-w-[64px] lesson-time-col justify-center gap-2">
+                   <span class="text-2xl font-extrabold text-on-surface dark:text-white">${startTime}</span>
+                   <span class="text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
+                 </div>
+              <div class="flex-grow flex flex-col">
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   ${typeBadge}
                   <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
@@ -3291,15 +3282,14 @@ document.addEventListener("DOMContentLoaded", async () => {
                     <span>Ауд. ${l.room || '—'}</span>
                   </span>
                 </div>
-                <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug">${l.subject}</h3>
-                <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2">
+                <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${l.subject}</h3>
+                <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
                   <span class="material-symbols-outlined text-base text-slate-400">${l.isTeacher ? 'groups' : 'person'}</span>
                   <span>${l.teacher || '—'}</span>
                  </p>
-               </div>
-             </div>
-           </div>
-         `;
+              </div>
+            </div>
+          `;
         if (isGroupModeActive()) {
           card.appendChild(buildAttendanceToggle(l));
         }
