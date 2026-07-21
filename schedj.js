@@ -940,6 +940,29 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
      }
   }
 
+  // BSEU отдаёт дату начала семестра (напр. "Mon Feb 8 00:00:00 UTC+0300 2026"),
+  // и эта дата может приходиться на субботу/воскресенье (а из-за часового пояса
+  // в строке ещё и "уезжает" на день назад). По факту учебная неделя 1 начинается
+  // со СЛЕДУЮЩЕГО понедельника после этой даты — иначе всё расписание (и фильтр
+  // по датам в режиме аудитории) съезжает ровно на неделю. Приводим дату начала
+  // семестра к понедельнику недели, её содержащей, и если он оказался раньше
+  // самой даты начала (воскресенье/суббота) — сдвигаем на неделю вперёд.
+  function normalizeSemesterStart(dateStr) {
+    const m = String(dateStr).match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return dateStr;
+    const sy = Number(m[1]), sm = Number(m[2]) - 1, sd = Number(m[3]);
+    const dow = new Date(Date.UTC(sy, sm, sd)).getUTCDay(); // 0 = воскресенье
+    const daysSinceMonday = dow === 0 ? 6 : dow - 1;
+    let monday = new Date(Date.UTC(sy, sm, sd - daysSinceMonday));
+    if (monday.getTime() < Date.UTC(sy, sm, sd)) {
+      monday.setUTCDate(monday.getUTCDate() + 7);
+    }
+    const y = monday.getUTCFullYear();
+    const mo = String(monday.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(monday.getUTCDate()).padStart(2, '0');
+    return `${y}-${mo}-${d}`;
+  }
+
   function parseScheduleHtml(html) {
     const $ = cheerio.load(html);
     const table = $('table').first();
@@ -951,7 +974,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     if (semesterMatch) {
       // Нормализуем к календарной дате YYYY-MM-DD (по UTC), чтобы расчёт пар
       // не зависел от часового пояса сервера (локально и на Render совпадал).
-      semesterStartDate = new Date(semesterMatch[1].trim()).toISOString().slice(0, 10);
+      semesterStartDate = normalizeSemesterStart(new Date(semesterMatch[1].trim()).toISOString().slice(0, 10));
     } else {
       const weekMatch = html.match(/Текущая\s+-\s+<strong>(\d+)<\/strong>\s+учебная\s+неделя/i);
       if (weekMatch) {
