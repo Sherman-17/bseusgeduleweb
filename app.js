@@ -3999,6 +3999,7 @@ card.innerHTML = `
 
       // Сбрасываем отображение верхней панели выбора, если она была открыта
       loadRates();
+      updateIncomeUI();
     } else {
       exitIncomeMode();
     }
