@@ -290,6 +290,26 @@ function parseWeeks(weeksStr) {
   return result;
 }
 
+function normalizeSemesterStartDate(input) {
+  if (!input) return input;
+  const value = String(input).trim();
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const [, y, mo] = m;
+    if (Number(mo) === 8) return `${y}-09-01`;
+    if (Number(mo) === 9) return `${y}-09-01`;
+    return value;
+  }
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return input;
+  if (date.getMonth() === 7) return `${date.getFullYear()}-09-01`;
+  if (date.getMonth() === 8) return `${date.getFullYear()}-09-01`;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function getMonday(d) {
   // Если передана строка YYYY-MM-DD — парсим как локальную дату,
   // чтобы избежать UTC→локальный сдвиг (например UTC полночь = воскресенье в UTC+3).
@@ -323,7 +343,17 @@ function getDateForLesson(dayName, weekNum) {
   const year = resultDate.getFullYear();
   const month = String(resultDate.getMonth() + 1).padStart(2, '0');
   const day = String(resultDate.getDate()).padStart(2, '0');
+  if (month === '08') return null;
   return `${year}-${month}-${day}`;
+}
+
+function isDateBeforeSemesterStart(dateISO, semesterStartDate = window.semesterStartDate) {
+  if (!dateISO || !semesterStartDate) return false;
+  const target = new Date(`${dateISO}T12:00:00`);
+  const start = new Date(`${normalizeSemesterStartDate(semesterStartDate)}T12:00:00`);
+  target.setHours(0, 0, 0, 0);
+  start.setHours(0, 0, 0, 0);
+  return target < start;
 }
 
 function calculateHours(start, end) {
@@ -2046,7 +2076,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       // Хранить как строку YYYY-MM-DD, а не Date-объект, чтобы getMonday
       // не применял UTC→локальный сдвиг при вычислении понедельника.
-      window.semesterStartDate = data.semesterStartDate || new Date().toISOString().slice(0, 10);
+      window.semesterStartDate = normalizeSemesterStartDate(data.semesterStartDate || new Date().toISOString().slice(0, 10));
       window.currentSemesterWeek = data.currentSemesterWeek || 1;
       window.cachedLessons = data.lessons || [];
 
@@ -2062,7 +2092,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (saveState.tab === "group" && isDefaultGroupActive) {
         localStorage.setItem("bseu_primary_group_lessons", JSON.stringify(data.lessons));
         if (window.semesterStartDate) {
-          localStorage.setItem("bseu_semester_start_date", typeof window.semesterStartDate === 'string' ? window.semesterStartDate : window.semesterStartDate.toISOString().slice(0, 10));
+          localStorage.setItem("bseu_semester_start_date", normalizeSemesterStartDate(typeof window.semesterStartDate === 'string' ? window.semesterStartDate : window.semesterStartDate.toISOString().slice(0, 10)));
         }
         if (typeof updateIntersectionAlerts === "function") {
           updateIntersectionAlerts();
@@ -2075,7 +2105,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const cached = loadScheduleCache(saveState.tab, saveState);
       if (cached && cached.payload) {
         const data = cached.payload;
-        window.semesterStartDate = data.semesterStartDate || new Date().toISOString().slice(0, 10);
+        window.semesterStartDate = normalizeSemesterStartDate(data.semesterStartDate || new Date().toISOString().slice(0, 10));
         window.currentSemesterWeek = data.currentSemesterWeek || 1;
         window.cachedLessons = data.lessons || [];
 
@@ -2799,6 +2829,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function renderLessonsForDate(dateISO) {
+    if (isDateBeforeSemesterStart(dateISO)) {
+      scheduleTitle.textContent = `${getGroupTitleText()} — ${formatHumanDate(dateISO)}`;
+      scheduleHeaderRow.classList.remove("hidden");
+      scheduleContainer.innerHTML = `
+        <div class="no-schedule bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/10 dark:border-slate-800 rounded-2xl p-12 text-center text-on-surface-variant/60 font-semibold flex flex-col items-center gap-3">
+          <span class="material-symbols-outlined text-4xl text-slate-400">event_busy</span>
+          <span>Занятий не найдено</span>
+        </div>`;
+      return;
+    }
+
     const date = new Date(dateISO);
     const daysOfWeekRU = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
     const targetDayName = daysOfWeekRU[date.getDay()];
@@ -3281,7 +3322,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       } else {
         weeks.forEach(weekNum => {
           const dateISO = getDateForLesson(l.day, weekNum);
-          if (dateISO) {
+          if (dateISO && !isDateBeforeSemesterStart(dateISO)) {
             if (!byDate[dateISO]) byDate[dateISO] = [];
             byDate[dateISO].push({ ...l, _dateISO: dateISO, _weekNum: weekNum });
           } else {
@@ -3734,6 +3775,12 @@ card.innerHTML = `
       setDefaultGroupActiveState(true);
       updateDefaultGroupModeClass();
       window.cachedLessons = cachedGroupLessons;
+      // Восстанавливаем дату начала семестра из localStorage, чтобы
+      // getStartOfWeek и renderCurrentMode корректно показывали неделю
+      // начала семестра (а не текущую неделю августа) при мгновенном
+      // показе расписания из кэша до ответа сервера.
+      const cachedSemStart = localStorage.getItem("bseu_semester_start_date");
+      if (cachedSemStart) window.semesterStartDate = normalizeSemesterStartDate(cachedSemStart);
       scheduleTitle.textContent = getGroupTitleText();
       scheduleHeaderRow.classList.remove("hidden");
       renderCurrentMode(false);
@@ -3976,6 +4023,7 @@ card.innerHTML = `
   function getLessonsForDate(dateISO) {
     const lessons = getPrimaryGroupLessons();
     if (!lessons.length) return [];
+    if (isDateBeforeSemesterStart(dateISO, localStorage.getItem("bseu_semester_start_date"))) return [];
     
     const date = new Date(dateISO + "T12:00:00");
     const daysOfWeekRU = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];

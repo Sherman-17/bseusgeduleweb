@@ -302,6 +302,16 @@ function normalizeSemesterStart(dateStr) {
   return `${y}-${mo}-${d}`;
 }
 
+function normalizeSemesterStartDate(input) {
+  const value = String(input || '').trim();
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return input;
+  const [, y, mo] = m;
+  if (Number(mo) === 8) return `${y}-09-01`;
+  if (Number(mo) === 9) return `${y}-09-01`;
+  return value;
+}
+
 function getAcademicSemesterStart(htmlDateStr) {
   const now = new Date();
   const currentMonth = now.getMonth(); // 0 = Jan, 7 = Aug, 8 = Sep...
@@ -317,7 +327,15 @@ function getAcademicSemesterStart(htmlDateStr) {
     const parsedMonth = parsedDate.getMonth();
     const parsedIsAutumn = (parsedMonth >= 7 || parsedMonth === 0);
     if (parsedIsAutumn === isAutumnPeriod) {
-      return normalizeSemesterStart(parsedDate.toISOString().slice(0, 10));
+      const candidate = normalizeSemesterStart(parsedDate.toISOString().slice(0, 10));
+      // Пары не должны быть в августе — корректируем на 1 сентября
+      if (candidate.includes('-08-')) {
+        let year = parsedDate.getFullYear();
+        if (currentMonth === 0) year -= 1;
+        const sept1 = new Date(Date.UTC(year, 8, 1));
+        return normalizeSemesterStartDate(normalizeSemesterStart(sept1.toISOString().slice(0, 10)));
+      }
+      return normalizeSemesterStartDate(candidate);
     }
   }
 
@@ -325,10 +343,10 @@ function getAcademicSemesterStart(htmlDateStr) {
   if (isAutumnPeriod) {
     if (currentMonth === 0) year -= 1;
     const sept1 = new Date(Date.UTC(year, 8, 1));
-    return normalizeSemesterStart(sept1.toISOString().slice(0, 10));
+    return normalizeSemesterStartDate(normalizeSemesterStart(sept1.toISOString().slice(0, 10)));
   } else {
     const feb8 = new Date(Date.UTC(year, 1, 8));
-    return normalizeSemesterStart(feb8.toISOString().slice(0, 10));
+    return normalizeSemesterStartDate(normalizeSemesterStart(feb8.toISOString().slice(0, 10)));
   }
 }
 
@@ -351,7 +369,14 @@ function parseScheduleHtml(html) {
       const diff = shifted.getUTCDate() - day + (day === 0 ? -6 : 1);
       const monday = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate() + diff));
       const sd = new Date(monday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
-      semesterStartDate = normalizeSemesterStart(sd.toISOString().slice(0, 10));
+      let candidate = normalizeSemesterStart(sd.toISOString().slice(0, 10));
+      // Пары не должны быть в августе — корректируем на 1 сентября
+      if (candidate.includes('-08-')) {
+        const year = shifted.getUTCFullYear();
+        const sept1 = new Date(Date.UTC(year, 8, 1));
+        candidate = normalizeSemesterStartDate(normalizeSemesterStart(sept1.toISOString().slice(0, 10)));
+      }
+      semesterStartDate = normalizeSemesterStartDate(candidate);
     } else {
       semesterStartDate = getAcademicSemesterStart(null);
       currentSemesterWeek = 1;
@@ -552,7 +577,10 @@ function lessonDate(semesterStartDate, dayName, weekNum) {
   const y = monday.getUTCFullYear();
   const mo = String(monday.getUTCMonth() + 1).padStart(2, '0');
   const d = String(monday.getUTCDate()).padStart(2, '0');
-  return `${y}-${mo}-${d}`;
+  const resultDate = `${y}-${mo}-${d}`;
+  // Пары не должны быть в августе
+  if (resultDate.includes('-08-')) return null;
+  return resultDate;
 }
 function parseWeeks(weeksStr) {
   if (!weeksStr) return [];

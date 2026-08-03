@@ -963,6 +963,16 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     return `${y}-${mo}-${d}`;
   }
 
+  function normalizeSemesterStartDate(input) {
+    const value = String(input || '').trim();
+    const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return input;
+    const [, y, mo] = m;
+    if (Number(mo) === 8) return `${y}-09-01`;
+    if (Number(mo) === 9) return `${y}-09-01`;
+    return value;
+  }
+
   function getAcademicSemesterStart(htmlDateStr) {
     const now = new Date();
     const currentMonth = now.getMonth(); // 0 = Jan, 7 = Aug, 8 = Sep...
@@ -986,10 +996,10 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     if (isAutumnPeriod) {
       if (currentMonth === 0) year -= 1;
       const sept1 = new Date(Date.UTC(year, 8, 1));
-      return normalizeSemesterStart(sept1.toISOString().slice(0, 10));
+      return normalizeSemesterStartDate(normalizeSemesterStart(sept1.toISOString().slice(0, 10)));
     } else {
       const feb8 = new Date(Date.UTC(year, 1, 8));
-      return normalizeSemesterStart(feb8.toISOString().slice(0, 10));
+      return normalizeSemesterStartDate(normalizeSemesterStart(feb8.toISOString().slice(0, 10)));
     }
   }
 
