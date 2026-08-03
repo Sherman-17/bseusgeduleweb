@@ -1,4 +1,4 @@
-const CACHE = 'bseu-schedule-v5';
+const CACHE = 'bseu-schedule-v8';
 const PRECACHE = [
   './',
   './index.html',

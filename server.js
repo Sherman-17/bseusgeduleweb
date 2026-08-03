@@ -302,6 +302,36 @@ function normalizeSemesterStart(dateStr) {
   return `${y}-${mo}-${d}`;
 }
 
+function getAcademicSemesterStart(htmlDateStr) {
+  const now = new Date();
+  const currentMonth = now.getMonth(); // 0 = Jan, 7 = Aug, 8 = Sep...
+  let parsedDate = null;
+  if (htmlDateStr) {
+    const d = new Date(htmlDateStr);
+    if (!isNaN(d.getTime())) parsedDate = d;
+  }
+
+  const isAutumnPeriod = (currentMonth >= 7 || currentMonth === 0);
+
+  if (parsedDate) {
+    const parsedMonth = parsedDate.getMonth();
+    const parsedIsAutumn = (parsedMonth >= 7 || parsedMonth === 0);
+    if (parsedIsAutumn === isAutumnPeriod) {
+      return normalizeSemesterStart(parsedDate.toISOString().slice(0, 10));
+    }
+  }
+
+  let year = now.getFullYear();
+  if (isAutumnPeriod) {
+    if (currentMonth === 0) year -= 1;
+    const sept1 = new Date(Date.UTC(year, 8, 1));
+    return normalizeSemesterStart(sept1.toISOString().slice(0, 10));
+  } else {
+    const feb8 = new Date(Date.UTC(year, 1, 8));
+    return normalizeSemesterStart(feb8.toISOString().slice(0, 10));
+  }
+}
+
 function parseScheduleHtml(html) {
   const $ = cheerio.load(html);
   const table = $('table').first();
@@ -309,20 +339,13 @@ function parseScheduleHtml(html) {
   let currentSemesterWeek = 1;
   const semesterMatch = html.match(/<!--(?:first|second)\s+semester=(.*?)-->/i);
   if (semesterMatch) {
-    // Нормализуем к календарной дате YYYY-MM-DD (по UTC), чтобы расчёт пар
-    // не зависел от часового пояса сервера (локально и на Render совпадал).
-    semesterStartDate = normalizeSemesterStart(new Date(semesterMatch[1].trim()).toISOString().slice(0, 10));
+    semesterStartDate = getAcademicSemesterStart(semesterMatch[1].trim());
   } else {
     const weekMatch = html.match(/Текущая\s+-\s+<strong>(\d+)<\/strong>\s+учебная\s+неделя/i);
     if (weekMatch) {
       const currentWeekNum = Number(weekMatch[1]);
       currentSemesterWeek = currentWeekNum;
       const today = new Date();
-      // BSEU считает учебную неделю по часовому поясу Europe/Minsk (UTC+3),
-      // а не по UTC сервера. На сервере в UTC (Render) на границе недели
-      // getUTCDay() указывает на предыдущий понедельник, и старт семестра
-      // съезжает ровно на неделю (расписание «на неделю раньше»). Сдвигаем
-      // «сейчас» на +3ч, чтобы граница недели совпадала с поясом BSEU.
       const shifted = new Date(today.getTime() + 3 * 60 * 60 * 1000);
       const day = shifted.getUTCDay();
       const diff = shifted.getUTCDate() - day + (day === 0 ? -6 : 1);
@@ -330,7 +353,7 @@ function parseScheduleHtml(html) {
       const sd = new Date(monday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
       semesterStartDate = normalizeSemesterStart(sd.toISOString().slice(0, 10));
     } else {
-      semesterStartDate = new Date().toISOString().slice(0, 10);
+      semesterStartDate = getAcademicSemesterStart(null);
       currentSemesterWeek = 1;
     }
   }
@@ -857,10 +880,84 @@ async function getAudienceScheduleBseu(audience, date) {
   return { data: payload, isFallback: false, fromCache: false, builtAt: fullScheduleUpdatedAt };
 }
 
+function normalizeGroupName(str) {
+  if (!str) return '';
+  return String(str).replace(/\s*\([^)]*\)/g, '').trim().toUpperCase();
+}
+
+async function getGroupScheduleAutoDetect(faculty, form, course, group, groupText) {
+  const body = `__act=__id.25.main.inpFldsA.GetSchedule__sp.7.results__fp.4.main&faculty=${faculty}&form=${form}&course=${course}&group=${group}&period=3`;
+  const cacheKey = `group:${faculty}:${form}:${course}:${group}`;
+  const schedule = await getScheduleWithCache(cacheKey, body);
+
+  if (schedule && Array.isArray(schedule.lessons) && schedule.lessons.length > 0) {
+    return schedule;
+  }
+
+  try {
+    let targetText = groupText ? normalizeGroupName(groupText) : null;
+
+    if (!targetText) {
+      try {
+        const groupsOnCurrentCourse = await fetchBseuList("__id.23.main.inpFldsA.GetGroups", { faculty, form, course });
+        if (Array.isArray(groupsOnCurrentCourse)) {
+          const gObj = groupsOnCurrentCourse.find(g => String(g.value) === String(group));
+          if (gObj) targetText = normalizeGroupName(gObj.text);
+        }
+      } catch (e) {}
+    }
+
+    const courses = await fetchBseuList("__id.23.main.inpFldsA.GetCourse", { faculty, form });
+    if (Array.isArray(courses)) {
+      const numCourse = Number(course) || 1;
+      const sortedCourses = courses.slice().sort((a, b) => {
+        const na = Number(a.value) || 0;
+        const nb = Number(b.value) || 0;
+        const diffA = na > numCourse ? (na - numCourse) : (100 + Math.abs(na - numCourse));
+        const diffB = nb > numCourse ? (nb - numCourse) : (100 + Math.abs(nb - numCourse));
+        return diffA - diffB;
+      });
+
+      for (const c of sortedCourses) {
+        if (String(c.value) === String(course)) continue;
+        const gs = await fetchBseuList("__id.23.main.inpFldsA.GetGroups", { faculty, form, course: c.value });
+        if (!Array.isArray(gs)) continue;
+
+        let matchedGroup = null;
+        if (targetText) {
+          matchedGroup = gs.find(g => normalizeGroupName(g.text) === targetText || String(g.value) === String(group));
+        } else {
+          matchedGroup = gs.find(g => String(g.value) === String(group));
+        }
+
+        if (matchedGroup) {
+          const newBody = `__act=__id.25.main.inpFldsA.GetSchedule__sp.7.results__fp.4.main&faculty=${faculty}&form=${form}&course=${c.value}&group=${matchedGroup.value}&period=3`;
+          const newCacheKey = `group:${faculty}:${form}:${c.value}:${matchedGroup.value}`;
+          const newSchedule = await getScheduleWithCache(newCacheKey, newBody);
+          if (newSchedule && Array.isArray(newSchedule.lessons) && newSchedule.lessons.length > 0) {
+            console.log(`[Course Auto-Detect] Группа ${matchedGroup.text} перешла с курса ${course} на курс ${c.value}`);
+            return {
+              ...newSchedule,
+              detectedCourse: c.value,
+              detectedGroup: matchedGroup.value,
+              courseChanged: true,
+              originalCourse: course
+            };
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Course Auto-Detect] Ошибка при автоопределении курса группы:', err.message);
+  }
+
+  return schedule;
+}
+
 // ===== Unified schedule endpoint (group / teacher / room) =====
 async function handleScheduleRequest(req, res) {
   try {
-    const { faculty, form, course, group, tid, taid, sid, tname, audience, date } = req.query;
+    const { faculty, form, course, group, groupText, tid, taid, sid, tname, audience, date } = req.query;
     if (audience && date) {
       const schedule = await getAudienceScheduleBseu(audience.trim(), date.trim());
       return res.json(schedule);
@@ -872,9 +969,7 @@ async function handleScheduleRequest(req, res) {
       return res.json(schedule);
     }
     if (faculty && form && course && group) {
-      const body = `__act=__id.25.main.inpFldsA.GetSchedule__sp.7.results__fp.4.main&faculty=${faculty}&form=${form}&course=${course}&group=${group}&period=3`;
-      const cacheKey = `group:${faculty}:${form}:${course}:${group}`;
-      const schedule = await getScheduleWithCache(cacheKey, body);
+      const schedule = await getGroupScheduleAutoDetect(faculty, form, course, group, groupText);
       return res.json(schedule);
     }
     return res.status(400).json({ error: 'missing_params', received: req.query });
@@ -972,6 +1067,30 @@ app.get('/api/teachers', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+app.get('/api/schedule-range', (req, res) => {
+  const range = getScheduleDateRange();
+  res.json({
+    ok: true,
+    min: range.min,
+    max: range.max,
+    hasCache: !!fullScheduleCache,
+    building: fullScheduleBuilding
+  });
+});
+
+  function getScheduleDateRange() {
+    let min = null;
+    let max = null;
+    const src = fullScheduleCache || [];
+    for (const p of src) {
+      for (const d of (p.dates || [])) {
+        if (min === null || d < min) min = d;
+        if (max === null || d > max) max = d;
+      }
+    }
+    return { min, max };
+  }
 
 // ===== Health check endpoint для Render =====
 app.get('/api/status', (req, res) => {

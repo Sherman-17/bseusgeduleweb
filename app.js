@@ -1,11 +1,13 @@
       // Регистрация service worker для возможности установки PWA на рабочий стол
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").catch((err) => {
-      console.warn("SW registration failed:", err);
-    });
-  });
-}
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("sw.js").then(reg => {
+            reg.update().catch(() => {});
+          }).catch((err) => {
+            console.warn("SW registration failed:", err);
+          });
+        });
+      }
 
 const FACULTIES = [
   { value: "12", text: "Учетно-экономический факультет (УЭФ)" },
@@ -28,7 +30,23 @@ const FACULTIES = [
 ];
 
 // ===== Кэширование расписания на случай недоступности сервера =====
-const SCHEDULE_CACHE_KEY = "bseu_schedule_cache_v1";
+const SCHEDULE_CACHE_KEY = "bseu_schedule_cache_v2";
+// Удаляем устаревшие версии кэша при загрузке страницы
+try {
+  ['bseu_schedule_cache_v1'].forEach(k => localStorage.removeItem(k));
+  // Если сохранённая дата начала семестра противоречит текущему месяцу — сбрасываем.
+  // Например, хранится февральская дата, а сейчас август (осенний семестр).
+  const _storedSemStart = localStorage.getItem('bseu_semester_start_date');
+  if (_storedSemStart) {
+    const _sm = new Date(_storedSemStart).getMonth(); // 0=Jan
+    const _cm = new Date().getMonth();
+    const _storedIsAutumn = (_sm >= 7 || _sm === 0);
+    const _currentIsAutumn = (_cm >= 7 || _cm === 0);
+    if (_storedIsAutumn !== _currentIsAutumn) {
+      localStorage.removeItem('bseu_semester_start_date');
+    }
+  }
+} catch(_){}
 
 function buildCacheKey(tab, params) {
   if (tab === "group") return `group:${params.faculty}:${params.form}:${params.course}:${params.group}`;
@@ -273,7 +291,15 @@ function parseWeeks(weeksStr) {
 }
 
 function getMonday(d) {
-  const date = new Date(d);
+  // Если передана строка YYYY-MM-DD — парсим как локальную дату,
+  // чтобы избежать UTC→локальный сдвиг (например UTC полночь = воскресенье в UTC+3).
+  let date;
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const [y, mo, day2] = d.split('-').map(Number);
+    date = new Date(y, mo - 1, day2); // локальная дата, без UTC-сдвига
+  } else {
+    date = new Date(d);
+  }
   const day = date.getDay();
   const diff = date.getDate() - day + (day === 0 ? -6 : 1);
   return new Date(date.setDate(diff));
@@ -487,10 +513,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   let isDefaultGroupActive = false; // true только когда загружена основная группа по умолчанию
   // Данные режима дохода (объявлены здесь, чтобы быть доступными
   // рендеру расписания группы, который может вызываться до блока доходов)
-  let incomeJobs = JSON.parse(localStorage.getItem('jobs')) || [
+  let incomeJobs = (() => { try { return JSON.parse(localStorage.getItem('jobs')); } catch(e) { return null; } })() || [
     { id: '1', name: 'Основная работа', rate: 12.50, currency: 'BYN', color: '#98A2F3' }
   ];
-  let incomeShifts = JSON.parse(localStorage.getItem('shifts')) || [];
+  let incomeShifts = (() => { try { return JSON.parse(localStorage.getItem('shifts')); } catch(e) { return null; } })() || [];
   const getBtn = document.getElementById("get-btn");
   
   const groupSelectionDiv = document.getElementById("group-selection");
@@ -1986,7 +2012,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       let fetchUrl = "";
       if (saveState.tab === "group") {
-        fetchUrl = `/api/schedule?faculty=${encodeURIComponent(saveState.faculty)}&form=${encodeURIComponent(saveState.form)}&course=${encodeURIComponent(saveState.course)}&group=${encodeURIComponent(saveState.group)}`;
+        fetchUrl = `/api/schedule?faculty=${encodeURIComponent(saveState.faculty)}&form=${encodeURIComponent(saveState.form)}&course=${encodeURIComponent(saveState.course)}&group=${encodeURIComponent(saveState.group)}&groupText=${encodeURIComponent(saveState.groupText || '')}`;
       } else if (saveState.tab === "teacher") {
         const { tid, taid, sid, tname } = saveState.teacher;
         fetchUrl = `/api/schedule?tid=${encodeURIComponent(tid)}&taid=${encodeURIComponent(taid)}&sid=${encodeURIComponent(sid)}&tname=${encodeURIComponent(tname)}`;
@@ -1996,7 +2022,31 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
 
-      window.semesterStartDate = data.semesterStartDate ? new Date(data.semesterStartDate) : new Date();
+      if (data.courseChanged && data.detectedCourse && data.detectedGroup) {
+        console.log(`[Client Schedule] Автоматическая смена курса: ${saveState.course} -> ${data.detectedCourse}`);
+        saveState.course = data.detectedCourse;
+        saveState.group = data.detectedGroup;
+        localStorage.setItem("bseu_saved_state", JSON.stringify(saveState));
+
+        const primaryGroupStr = localStorage.getItem("bseu_primary_group");
+        if (primaryGroupStr) {
+          const pg = JSON.parse(primaryGroupStr);
+          pg.course = data.detectedCourse;
+          pg.group = data.detectedGroup;
+          localStorage.setItem("bseu_primary_group", JSON.stringify(pg));
+        }
+        if (typeof courseSelect !== 'undefined' && courseSelect) {
+          courseSelect.value = data.detectedCourse;
+        }
+        if (typeof groupSelect !== 'undefined' && groupSelect) {
+          ensureSelectValue(groupSelect, data.detectedGroup, saveState.groupText);
+          groupSelect.value = data.detectedGroup;
+        }
+      }
+
+      // Хранить как строку YYYY-MM-DD, а не Date-объект, чтобы getMonday
+      // не применял UTC→локальный сдвиг при вычислении понедельника.
+      window.semesterStartDate = data.semesterStartDate || new Date().toISOString().slice(0, 10);
       window.currentSemesterWeek = data.currentSemesterWeek || 1;
       window.cachedLessons = data.lessons || [];
 
@@ -2012,7 +2062,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (saveState.tab === "group" && isDefaultGroupActive) {
         localStorage.setItem("bseu_primary_group_lessons", JSON.stringify(data.lessons));
         if (window.semesterStartDate) {
-          localStorage.setItem("bseu_semester_start_date", window.semesterStartDate.toISOString());
+          localStorage.setItem("bseu_semester_start_date", typeof window.semesterStartDate === 'string' ? window.semesterStartDate : window.semesterStartDate.toISOString().slice(0, 10));
         }
         if (typeof updateIntersectionAlerts === "function") {
           updateIntersectionAlerts();
@@ -2025,7 +2075,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const cached = loadScheduleCache(saveState.tab, saveState);
       if (cached && cached.payload) {
         const data = cached.payload;
-        window.semesterStartDate = data.semesterStartDate ? new Date(data.semesterStartDate) : new Date();
+        window.semesterStartDate = data.semesterStartDate || new Date().toISOString().slice(0, 10);
         window.currentSemesterWeek = data.currentSemesterWeek || 1;
         window.cachedLessons = data.lessons || [];
 
@@ -2459,7 +2509,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   function renderCurrentMode(shouldScroll = true) {
     if (!window.cachedLessons) window.cachedLessons = [];
     updateWeekLabel();
-    const targetDate = window.selectedDateISO || todayISO();
+    let targetDate = window.selectedDateISO || todayISO();
+    if (currentDisplayMode === "days") {
+      const stripStart = getStartOfWeek(currentWeekOffset);
+      const stripEnd = new Date(stripStart);
+      stripEnd.setDate(stripEnd.getDate() + 6);
+      const target = new Date(targetDate);
+      target.setHours(0, 0, 0, 0);
+      stripStart.setHours(0, 0, 0, 0);
+      if (target < stripStart || target > stripEnd) {
+        targetDate = formatDateToISO(stripStart);
+      }
+    }
     if (currentDisplayMode === "semester") {
       renderSemesterView(shouldScroll);
     } else if (currentDisplayMode === "exams") {
@@ -2559,8 +2620,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const primaryGroup = JSON.parse(primaryGroupStr);
-    // Показываем и активируем кнопку основной группы сразу, не дожидаясь сети
+    const primaryGroup = (() => { try { return JSON.parse(primaryGroupStr); } catch(e) { return null; } })();
+    if (!primaryGroup) {
+      setActiveTab("group");
+      showFirstTimeModal();
+      return;
+    }
     showPrimaryGroupButton(primaryGroup.groupText);
     const bottomDefaultBtn = document.getElementById('bottom-default-group-btn');
     if (bottomDefaultBtn) {
@@ -2605,13 +2670,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   let currentWeekOffset = 0;
   
   function getStartOfWeek(offset = 0) {
-    const d = new Date();
-    const day = (d.getDay() + 6) % 7; // Понедельник = 0
+    let baseDate = new Date();
+    if (window.semesterStartDate) {
+      const todayMon = getMonday(new Date());
+      todayMon.setHours(0, 0, 0, 0);
+      baseDate = todayMon;
+    }
+    const d = new Date(baseDate);
+    const day = (d.getDay() + 6) % 7;
     d.setHours(0, 0, 0, 0);
     d.setDate(d.getDate() - day + (offset * 7));
-    // Коррекция для часового пояса
-    const tz = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-    return tz;
+    return d;
   }
   
   function updateWeekLabel() {
@@ -2742,7 +2811,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       semesterMonday.setHours(0,0,0,0);
       const msDiff = targetMonday.getTime() - semesterMonday.getTime();
       const weekDiff = Math.round(msDiff / (7 * 24 * 60 * 60 * 1000));
-      targetWeekNum = weekDiff + 1;
+      // Не даём номеру недели уйти в отрицательные значения до начала
+      // семестра (например, в августе до 1 сентября) — иначе фильтр
+      // weeks.includes(targetWeekNum) не находит ни одной пары.
+      targetWeekNum = Math.max(1, weekDiff + 1);
     }
     
     const filtered = (window.cachedLessons || []).filter(l => {
@@ -3149,7 +3221,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else if (mode === "exams") {
       renderExamView(false);
     } else {
-      const targetDate = window.selectedDateISO || todayISO();
+      const targetDate = window.selectedDateISO || formatDateToISO(getStartOfWeek(currentWeekOffset));
       renderDayStrip(targetDate);
       selectDayOnStrip(targetDate);
     }
@@ -3490,7 +3562,49 @@ card.innerHTML = `
 
     try {
       resetSelect(groupSelect, "Загрузка групп...");
-      const groups = await apiRequest("__id.23.main.inpFldsA.GetGroups", { faculty: state.faculty, form: state.form, course: state.course });
+      let groups = await apiRequest("__id.23.main.inpFldsA.GetGroups", { faculty: state.faculty, form: state.form, course: state.course });
+
+      // Проверка перевода группы на следующий курс (например 1-й -> 2-й)
+      if (state.groupText && Array.isArray(groups)) {
+        function normName(s) { return s ? String(s).replace(/\s*\([^)]*\)/g, '').trim().toUpperCase() : ''; }
+        const targetNorm = normName(state.groupText);
+        const matchOnCurrent = groups.find(g => normName(g.text) === targetNorm || String(g.value) === String(state.group));
+        if (!matchOnCurrent) {
+          const availCourses = Array.from(courseSelect.options).map(o => o.value).filter(v => v && v !== "-1");
+          const numCourse = Number(state.course) || 1;
+          const sorted = availCourses.sort((a, b) => {
+            const na = Number(a) || 0, nb = Number(b) || 0;
+            const diffA = na > numCourse ? (na - numCourse) : (100 + Math.abs(na - numCourse));
+            const diffB = nb > numCourse ? (nb - numCourse) : (100 + Math.abs(nb - numCourse));
+            return diffA - diffB;
+          });
+          for (const cVal of sorted) {
+            if (cVal === String(state.course)) continue;
+            try {
+              const candidateGroups = await apiRequest("__id.23.main.inpFldsA.GetGroups", { faculty: state.faculty, form: state.form, course: cVal });
+              if (Array.isArray(candidateGroups)) {
+                const found = candidateGroups.find(g => normName(g.text) === targetNorm || String(g.value) === String(state.group));
+                if (found) {
+                  console.log(`[App Auto-Course] Группа ${state.groupText} перешла с курса ${state.course} на курс ${cVal}`);
+                  state.course = cVal;
+                  state.group = found.value;
+                  courseSelect.value = cVal;
+                  groups = candidateGroups;
+                  const primaryGroupStr = localStorage.getItem("bseu_primary_group");
+                  if (primaryGroupStr) {
+                    const pg = JSON.parse(primaryGroupStr);
+                    pg.course = cVal;
+                    pg.group = found.value;
+                    localStorage.setItem("bseu_primary_group", JSON.stringify(pg));
+                  }
+                  break;
+                }
+              }
+            } catch (err) {}
+          }
+        }
+      }
+
       populateSelect(groupSelect, groups, "Выберите группу", shortenGroupName);
       applySelectAbbrev(groupSelect);
     } catch (e) {
@@ -3809,16 +3923,15 @@ card.innerHTML = `
   const multicurrencyToggle = document.getElementById("multicurrency-toggle");
 
   // Переменные состояния Доходов
-  incomeJobs = JSON.parse(localStorage.getItem('jobs')) || [
+  incomeJobs = (() => { try { return JSON.parse(localStorage.getItem('jobs')); } catch(e) { return null; } })() || [
       { id: '1', name: 'Основная работа', rate: 12.50, currency: 'BYN', color: '#98A2F3' }
-  ];
-  incomeShifts = JSON.parse(localStorage.getItem('shifts')) || [];
+    ];
+  incomeShifts = (() => { try { return JSON.parse(localStorage.getItem('shifts')); } catch(e) { return null; } })() || [];
   let incomeCurrentCurrency = localStorage.getItem('currency') || 'BYN';
   let incomeStartDay = parseInt(localStorage.getItem('startDay')) || 1;
   let incomeIsMultiCurrency = localStorage.getItem('isMultiCurrency') === 'true';
-  let incomeMonthlySalariesPeriod = JSON.parse(localStorage.getItem('monthlySalariesPeriod')) || {};
-  // Дни, для которых скрыто уведомление о пересечении с парами
-  let incomeDismissedIntersections = JSON.parse(localStorage.getItem('dismissedIntersections')) || [];
+  let incomeMonthlySalariesPeriod = (() => { try { return JSON.parse(localStorage.getItem('monthlySalariesPeriod')); } catch(e) { return null; } })() || {};
+  let incomeDismissedIntersections = (() => { try { return JSON.parse(localStorage.getItem('dismissedIntersections')); } catch(e) { return null; } })() || [];
 
   let incomeGlobalDate = new Date(); 
   let incomeChartInstance = null;
@@ -3878,7 +3991,9 @@ card.innerHTML = `
       semesterMonday.setHours(0,0,0,0);
       const msDiff = targetMonday.getTime() - semesterMonday.getTime();
       const weekDiff = Math.round(msDiff / (7 * 24 * 60 * 60 * 1000));
-      targetWeekNum = weekDiff + 1;
+      // Не даём номеру недели уйти в отрицательные значения до начала
+      // семестра — иначе пересечения смен с парами не определяются.
+      targetWeekNum = Math.max(1, weekDiff + 1);
     }
     
     return lessons.filter(l => {
