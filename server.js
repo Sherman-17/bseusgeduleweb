@@ -142,6 +142,7 @@ app.post('/api/sync', (req, res) => {
 
 // ===== File-based cache layer (для расписания BSEU) =====
 const CACHE_DIR = path.join(__dirname, '.cache');
+const CACHE_VERSION = 'v4'; // Увеличить при изменении логики парсинга
 function ensureCacheDir() {
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -151,7 +152,7 @@ ensureCacheDir();
 
 function cacheFilePath(key) {
   const safe = Buffer.from(key).toString('base64').replace(/[/+=]/g, '_');
-  return path.join(CACHE_DIR, `${safe}.json`);
+  return path.join(CACHE_DIR, `${CACHE_VERSION}_${safe}.json`);
 }
 function fileGetCache(key) {
   try {
@@ -388,38 +389,47 @@ function parseScheduleHtml(html) {
   let currentDay = '';
   const lessons = [];
   const headers = [];
-  table.find('thead th').each((idx, th) => headers.push($(th).text().trim().toLowerCase()));
+  table.find('thead th, thead td').each((idx, th) => headers.push($(th).text().trim().toLowerCase()));
+  if (headers.length === 0) {
+    table.find('tr:first-child th, tr:first-child td').each((idx, th) => headers.push($(th).text().trim().toLowerCase()));
+  }
   const isTeacherSchedule = headers.includes('группа');
   const rowArr = rows.toArray();
 
   for (let i = 0; i < rowArr.length; i++) {
     const row = $(rowArr[i]);
-    const wdayCell = row.find('td.wday');
+    const wdayCell = row.find('td.wday, td.day, td.dayofweek, td.day-name, td[class*="day"]');
     if (wdayCell.length) { currentDay = wdayCell.text().trim(); continue; }
     const cells = row.find('td');
     if (cells.length >= 3) {
       if (isTeacherSchedule) {
         if (cells.length >= 5) {
           const time = $(cells[0]).text().trim();
-          const group = $(cells[1]).text().trim();
+          const groupText = $(cells[1]).html().replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
           const subgroup = $(cells[2]).text().trim();
           const contentCell = $(cells[3]);
           const room = $(cells[4]).text().trim();
           const distypeSpan = contentCell.find('.distype');
           const type = distypeSpan.length ? distypeSpan.text().replace(/[()]/g, '').trim() : '';
           const emEl = contentCell.find('em');
-          const subject = emEl.length ? emEl.text().trim() : '';
+          let subject = emEl.length ? emEl.text().trim() : '';
+          if (!subject) {
+            const strongEl = contentCell.find('strong, b');
+            subject = strongEl.length ? strongEl.first().text().trim() : '';
+          }
           let weeks = '';
           const clone = contentCell.clone();
           clone.find('.distype').remove();
           clone.find('em').remove();
+          clone.find('strong, b').remove();
           const rawText = clone.text().trim();
           const match = rawText.match(/^\(([^)]+)\)/);
           if (match) weeks = match[1];
           else weeks = rawText;
-          const displayGroup = subgroup ? `${group} (${subgroup})` : group;
+          const groups = groupText.split(/[\n\r,;]+|\s{2,}/).map(g => g.trim()).filter(Boolean);
+          const displayGroup = groups.join(', ') + (subgroup ? ` (${subgroup})` : '');
           if (subject && time) {
-            lessons.push({ day: currentDay || "Вне сетки", time, weeks, subject, type, teacher: displayGroup, room, isTeacher: true });
+            lessons.push({ day: currentDay || "Вне сетки", time, weeks, subject, type, teacher: displayGroup, room, isTeacher: true, groups: groups });
           }
         }
       } else {
@@ -991,7 +1001,7 @@ async function handleScheduleRequest(req, res) {
       return res.json(schedule);
     }
     if (tid && taid && sid && tname) {
-      const body = `tid.${tid.length}.${tid}taid.${taid.length}.${taid}sid.${sid.length}.${sid}__id.22.main.TSchedA.GetTSched__sp.8.tresults__fp.4.main&tname=${tname}&period=3`;
+      const body = `__act=tid.${tid.length}.${tid}taid.${taid.length}.${taid}sid.${sid.length}.${sid}__id.22.main.TSchedA.GetTSched__sp.8.tresults__fp.4.main&tname=${toWin1251Url(tname)}&period=3`;
       const cacheKey = `teacher:${tid}:${taid}:${sid}:${tname}`;
       const schedule = await getScheduleWithCache(cacheKey, body);
       return res.json(schedule);

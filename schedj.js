@@ -1059,7 +1059,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
         if (isTeacherSchedule) {
           if (cells.length >= 5) {
             const time = $(cells[0]).text().trim();
-            const group = $(cells[1]).text().trim();
+            const groupText = $(cells[1]).html().replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
             const subgroup = $(cells[2]).text().trim();
             const contentCell = $(cells[3]);
             const room = $(cells[4]).text().trim();
@@ -1082,7 +1082,8 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
               weeks = rawText;
             }
             
-            const displayGroup = subgroup ? `${group} (${subgroup})` : group;
+            const groups = groupText.split(/[\n\r,;]+|\s{2,}/).map(g => g.trim()).filter(Boolean);
+            const displayGroup = groups.join(', ') + (subgroup ? ` (${subgroup})` : '');
             if (subject && time) {
               lessons.push({
                 day: currentDay || "Вне сетки",
@@ -1350,7 +1351,7 @@ app.get('/api/forms', async (req, res) => {
 
       // Режим преподавателя (источник bseu.by)
       if (tid && taid && sid && tname) {
-        const body = `__act=tid.${tid.length}.${tid}taid.${taid.length}.${taid}sid.${sid.length}.${sid}__id.22.main.TSchedA.GetTSched__sp.8.tresults__fp.4.main&tname=${tname}&period=3`;
+        const body = `__act=tid.${tid.length}.${tid}taid.${taid.length}.${taid}sid.${sid.length}.${sid}__id.22.main.TSchedA.GetTSched__sp.8.tresults__fp.4.main&tname=${toWin1251Url(tname)}&period=3`;
         const cacheKey = `teacher:${tid}:${taid}:${sid}:${tname}`;
         const schedule = await getScheduleWithCache(cacheKey, body);
         return res.json(schedule);

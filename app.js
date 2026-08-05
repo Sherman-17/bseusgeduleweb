@@ -503,6 +503,33 @@ function formatHours(h) {
   return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)} ч`;
 }
 
+// Сокращает длинные типы пар
+function shortenLessonType(type) {
+  if (!type) return type;
+  const normalized = type.trim().replace(/\s+/g, ' ');
+  const typeMap = {
+    'Практическое занятие': 'Прак. зан.',
+    'Практические занятия': 'Прак. зан.',
+    'Лабораторная работа': 'Лаб. раб.',
+    'Лабораторные работы': 'Лаб. раб.',
+    'Лабораторное занятие': 'Лаб. зан.',
+    'Лабораторные занятия': 'Лаб. зан.',
+    'Практическое': 'Прак.',
+    'Практические': 'Прак.',
+    'Лабораторное': 'Лаб.',
+    'Лабораторные': 'Лаб.',
+    'Семинары': 'Сем.',
+    'Семинар': 'Сем.',
+    'Экзамен': 'Экз.',
+    'Экзамены': 'Экз.',
+    'Всего': '',
+  };
+  const lowerNormalized = normalized.toLowerCase();
+  const entry = Object.entries(typeMap).find(([key]) => key.toLowerCase() === lowerNormalized);
+  return entry ? entry[1] : type;
+}
+
+
 // Показать/скрыть панель пропусков.
 // Получаем элемент панели через getElementById (а не через переменную
 // из области видимости DOMContentLoaded), т.к. эта функция определена
@@ -683,7 +710,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       modeSemesterBtn.classList.remove("hidden");
       modeExamsBtn.classList.remove("hidden");
       scheduleToolbar.classList.toggle("hidden", !(window.cachedLessons && window.cachedLessons.length));
-    } else if (tab === "teacher") {
+     } else if (tab === "teacher") {
        tabTeacher.className = activeTabClasses;
        tabGroup.className = inactiveTabClasses;
        tabRoom.className = inactiveTabClasses;
@@ -694,9 +721,12 @@ document.addEventListener("DOMContentLoaded", async () => {
        teacherSelectionDiv.classList.remove("hidden");
        roomSelectionDiv.classList.add("hidden");
        periodSection.style.display = 'block';
-       // В режиме преподавателя — только "Экзамены" (по умолчанию расписание по дням)
-       modeDaysBtn.classList.add("hidden");
-       modeSemesterBtn.classList.add("hidden");
+       // В режиме преподавателя показываем все режимы: "По дням", "На семестр",
+       // "Экзамены". Раньше были скрыты "По дням" и "На семестр", из-за чего
+       // при загрузке вне семестра расписание казалось пустым и его нельзя
+       // было посмотреть на семестр целиком.
+       modeDaysBtn.classList.remove("hidden");
+       modeSemesterBtn.classList.remove("hidden");
        modeExamsBtn.classList.remove("hidden");
        scheduleToolbar.classList.toggle("hidden", !(window.cachedLessons && window.cachedLessons.length));
      } else {
@@ -915,6 +945,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     }, 300);
   });
 
+  teacherInput.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      autocompleteList.innerHTML = "";
+      autocompleteList.classList.add("hidden");
+    }
+  });
+
   function renderSuggestions(teachers) {
     autocompleteList.innerHTML = "";
     if (teachers.length === 0) {
@@ -969,10 +1006,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   roomInput.addEventListener('keydown', event => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      getSchedule();
-    }
     if (event.key === 'Escape') {
       closeRoomDropdown();
       hideRoomCalendar();
@@ -1247,11 +1280,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       const lessons = Array.isArray(day.lessons) ? day.lessons : [];
       const lessonsHtml = lessons.length ? lessons.map(lesson => {
         const subject = lesson.shortNameRU || lesson.fullNameRU || lesson.subject || 'Без названия';
-        const type = lesson.lessonTypeShortNameRU || lesson.lessonTypeNameRU || lesson.type || 'Занятие';
+        const type = shortenLessonType(lesson.lessonTypeShortNameRU || lesson.lessonTypeNameRU || lesson.type || 'Занятие');
         const teachers = Array.isArray(lesson.teachers) && lesson.teachers.length ? lesson.teachers.join(', ') : (lesson.teacher || '—');
         const groups = Array.isArray(lesson.groups) && lesson.groups.length
-          ? lesson.groups.map(formatGroupLabel).join(', ')
-          : (lesson.group ? formatGroupLabel(lesson.group) : '—');
+          ? lesson.groups.map(shortenGroupName).join(', ')
+          : (lesson.group ? shortenGroupName(lesson.group) : '—');
         const room = lesson.audience || selectedAudience || '—';
         const start = fmtTime(lesson.startTime || lesson.time?.split('-')[0]);
         const end = fmtTime(lesson.endTime || lesson.time?.split('-')[1]);
@@ -1261,12 +1294,12 @@ document.addEventListener("DOMContentLoaded", async () => {
           <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card flex flex-col min-w-0">
             <div class="absolute top-0 left-0 w-0.5 h-full ${styles.border}"></div>
             <div class="flex items-stretch justify-between h-full flex-grow">
-              <div class="flex gap-4 w-full">
-                <div class="flex flex-col items-center min-w-[64px] lesson-time-col justify-center gap-2">
+                <div class="flex gap-1 w-full">
+                  <div class="flex flex-col items-center min-w-[48px] lesson-time-col justify-center gap-2">
                   <span class="text-2xl font-extrabold text-on-surface dark:text-white">${escapeHtml(start)}</span>
                   <span class="text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400">${escapeHtml(end)}</span>
                 </div>
-                <div class="flex-grow flex flex-col min-w-0">
+                 <div class="flex-1 flex flex-col min-w-0">
                   <div class="flex flex-wrap items-center gap-2 mb-2 lesson-meta-row">
                     ${typeBadge}
                     <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
@@ -1274,11 +1307,11 @@ document.addEventListener("DOMContentLoaded", async () => {
                       <span>Ауд. ${escapeHtml(room)}</span>
                     </span>
                   </div>
-                  <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${escapeHtml(subject)}</h3>
-                  <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
-                    <span class="material-symbols-outlined text-base text-slate-400 shrink-0">${lesson.isTeacher ? 'groups' : 'person'}</span>
-                    <span class="truncate">${escapeHtml(teachers)}</span>
-                  </p>
+                  <h3 class="subject-line text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug min-w-0 break-words">${escapeHtml(subject)}</h3>
+                   <p class="teacher-line text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
+                     <span class="material-symbols-outlined text-base text-slate-400 shrink-0">${lesson.isTeacher ? 'groups' : 'person'}</span>
+                      <span class="teacher-text flex-1">${escapeHtml(teachers)}</span>
+                   </p>
                   <p class="text-primary dark:text-[#b5bcff] font-semibold text-xs flex items-center gap-2 flex-shrink-0">
                     <span class="material-symbols-outlined text-sm shrink-0">groups</span>
                     <span class="truncate">${escapeHtml(groups)}</span>
@@ -2281,7 +2314,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     const styles = getLessonStyles(l.type);
     const card = document.createElement("div");
     card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card flex flex-col items-stretch min-w-0";
-    card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
+    
+    // В режиме преподавателя группы отображаются в поле teacher через запятую
+    const displayTeacher = l.isTeacher && l.teacher
+      ? l.teacher.split(/[\n\r,;]+|\s{2,}/).join(', ')
+      : (l.teacher || '—');
+    
+    card.setAttribute("data-search", `${l.subject} ${displayTeacher}`.toLowerCase());
     card._lesson = l;
     card.dataset.attKey = getAttendanceKey(l);
 
@@ -2289,7 +2328,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const startTime = timeParts[0] ? timeParts[0].trim() : l.time;
     const endTime = timeParts[1] ? timeParts[1].trim() : "";
 
-    const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${l.type}</span>` : "";
+    const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${shortenLessonType(l.type)}</span>` : "";
     const weeksBadge = (l.weeks && showWeeks) ? `<span class="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-bold px-2 py-1 rounded">Недели: ${l.weeks}</span>` : "";
 
     // Домашнее задание для этой пары (если есть) - только в режиме группы по умолчанию
@@ -2317,13 +2356,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     card.innerHTML = `
       <div class="absolute top-0 left-0 w-0.5 h-full ${styles.border}"></div>
       <div class="flex items-stretch justify-between h-full flex-grow">
-        <div class="flex gap-4 w-full">
-                <div class="flex flex-col items-center min-w-[64px] lesson-time-col justify-center gap-2">
+              <div class="flex gap-1 w-full">
+                <div class="flex flex-col items-center min-w-[48px] lesson-time-col justify-center gap-2">
                   <span class="text-2xl font-extrabold text-on-surface dark:text-white">${startTime}</span>
                   <span class="text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
                 </div>
-              <div class="flex-grow flex flex-col min-w-0">
-                <div class="flex flex-wrap items-center gap-2 mb-2 lesson-meta-row">
+               <div class="flex-1 flex flex-col min-w-0">
+                 <div class="flex flex-wrap items-center gap-2 mb-2 lesson-meta-row">
                   ${typeBadge}
                   <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
                     <span class="material-symbols-outlined text-base">location_on</span>
@@ -2331,12 +2370,21 @@ document.addEventListener("DOMContentLoaded", async () => {
                   </span>
                   ${weeksBadge}
                 </div>
-                 <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${l.subject}</h3>
-                  <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
-                    <span class="material-symbols-outlined text-sm text-slate-400 shrink-0">${l.isTeacher ? 'groups' : 'person'}</span>
-                    <span class="truncate">${l.teacher || '—'}</span>
-                  </p>
-                 ${hwHtml}
+                 <h3 class="subject-line text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug min-w-0 break-words">${escapeHtml(l.subject)}</h3>
+                    <p class="teacher-line text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
+                      <span class="material-symbols-outlined text-sm text-slate-400 shrink-0">${l.isTeacher ? 'groups' : 'person'}</span>
+                       <span class="teacher-text flex-1">${escapeHtml(displayTeacher)}</span>
+                    </p>
+                    ${(l.groups || l.group) && !l.isTeacher ? `
+                    <p class="text-primary dark:text-[#b5bcff] font-semibold text-xs flex items-center gap-2 flex-shrink-0">
+                      <span class="material-symbols-outlined text-sm shrink-0">groups</span>
+                      <span class="truncate">${escapeHtml(
+                        Array.isArray(l.groups) && l.groups.length
+                          ? l.groups.map(shortenGroupName).join(', ')
+                          : (l.group ? shortenGroupName(l.group) : '')
+                      )}</span>
+                    </p>` : ''}
+                  ${hwHtml}
               </div>
         </div>
       </div>
@@ -2587,8 +2635,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         const card = document.createElement("div");
         const styles = getLessonStyles(l.type);
         
+        // В режиме преподавателя группы отображаются в поле teacher через запятую
+        const displayTeacher = l.isTeacher && l.teacher
+          ? l.teacher.split(/[\n\r,;]+|\s{2,}/).join(', ')
+          : (l.teacher || '—');
+        
         card.className = "bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border border-outline-variant/10 dark:border-slate-800 relative overflow-hidden group lesson-card flex flex-col items-stretch min-w-0";
-        card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
+        card.setAttribute("data-search", `${l.subject} ${displayTeacher}`.toLowerCase());
         card._lesson = l;
         card.dataset.attKey = getAttendanceKey(l);
 
@@ -2597,7 +2650,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const startTime = timeParts[0] ? timeParts[0].trim() : l.time;
         const endTime = timeParts[1] ? timeParts[1].trim() : "";
 
-        const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${l.type}</span>` : "";
+        const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${shortenLessonType(l.type)}</span>` : "";
 
         card.innerHTML = `
           <!-- Левый вертикальный цветной индикатор типа пары -->
@@ -2609,8 +2662,8 @@ document.addEventListener("DOMContentLoaded", async () => {
                 <span class="text-2xl font-extrabold text-on-surface dark:text-white">${startTime}</span>
                 <span class="text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
               </div>
-              <!-- Блок информации о занятии -->
-              <div class="flex-grow flex flex-col min-w-0">
+    <!-- Блок информации о занятии -->
+               <div class="flex-1 flex flex-col min-w-0">
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   ${typeBadge}
                   <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
@@ -2618,10 +2671,10 @@ document.addEventListener("DOMContentLoaded", async () => {
                     <span>Ауд. ${l.room || '—'}</span>
                   </span>
                 </div>
-                <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${l.subject}</h3>
+                <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${escapeHtml(l.subject)}</h3>
                 <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
                   <span class="material-symbols-outlined text-sm text-slate-400 shrink-0">${l.isTeacher ? 'groups' : 'person'}</span>
-                  <span class="truncate">${l.teacher || '—'}</span>
+           <span class="teacher-text flex-1">${escapeHtml(displayTeacher)}</span>
                 </p>
               </div>
             </div>
@@ -2830,12 +2883,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function renderLessonsForDate(dateISO) {
     if (isDateBeforeSemesterStart(dateISO)) {
-      scheduleTitle.textContent = `${getGroupTitleText()} — ${formatHumanDate(dateISO)}`;
+      const isTeacherTab = document.getElementById("tab-teacher").classList.contains("segment-btn-active");
+      let titlePrefix = "";
+      if (isTeacherTab) {
+        titlePrefix = selectedTeacher?.tname || "";
+      } else {
+        titlePrefix = getGroupTitleText();
+      }
+      scheduleTitle.textContent = `${titlePrefix} — ${formatHumanDate(dateISO)}`;
       scheduleHeaderRow.classList.remove("hidden");
       scheduleContainer.innerHTML = `
-        <div class="no-schedule bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/10 dark:border-slate-800 rounded-2xl p-12 text-center text-on-surface-variant/60 font-semibold flex flex-col items-center gap-3">
+        <div class="bg-surface-container-lowest dark:bg-slate-900 rounded-xl border border-outline-variant/10 dark:border-slate-800 p-8 text-center text-on-surface-variant/60 font-semibold flex flex-col items-center gap-3">
           <span class="material-symbols-outlined text-4xl text-slate-400">event_busy</span>
-          <span>Занятий не найдено</span>
+          <span>Занятий не найдены</span>
         </div>`;
       return;
     }
@@ -2968,11 +3028,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       inactiveExamClasses;
     examsToggle.className = currentDisplayMode === "exams" ? activeExamBtnClasses : inactiveExamBtnClasses;
 
-    // В режиме преподавателя скрываем "По дням" и "На семестр" — остаётся только "Экзамены"
-    if (isTeacherTab) {
-      modeDaysBtn.classList.add("hidden");
-      modeSemesterBtn.classList.add("hidden");
-    } else {
+    // В режиме преподавателя показываем все режимы: "По дням", "На семестр",
+    // "Экзамены" (раньше "По дням" и "На семестр" скрывались, из-за чего
+    // расписание вне текущей недели нельзя было увидеть).
+    modeDaysBtn.classList.remove("hidden");
+    modeSemesterBtn.classList.remove("hidden");
+    if (!isTeacherTab) {
       modeDaysBtn.classList.remove("hidden");
       modeSemesterBtn.classList.remove("hidden");
     }
@@ -3370,9 +3431,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       byDate[dateKey].forEach(l => {
         const styles = getLessonStyles(l.type);
         
+        // В режиме преподавателя группы отображаются в поле teacher через запятую
+        const displayTeacher = l.isTeacher && l.teacher
+          ? l.teacher.split(/[\n\r,;]+|\s{2,}/).join(', ')
+          : (l.teacher || '—');
+        
         const card = document.createElement("div");
         card.className = `bg-surface-container-lowest dark:bg-slate-900 rounded-xl p-6 transition-all hover:translate-x-1 duration-300 border ${styles.borderColor} shadow-sm relative overflow-hidden group lesson-card flex flex-col items-stretch min-w-0`;
-        card.setAttribute("data-search", `${l.subject} ${l.teacher}`.toLowerCase());
+        card.setAttribute("data-search", `${l.subject} ${displayTeacher}`.toLowerCase());
         card._lesson = l;
         card.dataset.attKey = getAttendanceKey(l);
 
@@ -3380,17 +3446,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         const startTime = timeParts[0] ? timeParts[0].trim() : l.time;
         const endTime = timeParts[1] ? timeParts[1].trim() : "";
         
-        const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${l.type}</span>` : "";
+        const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${shortenLessonType(l.type)}</span>` : "";
 
 card.innerHTML = `
   <div class="absolute top-0 left-0 w-0.5 h-full ${styles.border}"></div>
   <div class="flex items-stretch justify-between h-full flex-grow">
-    <div class="flex gap-4 w-full">
-      <div class="flex flex-col items-center min-w-[64px] lesson-time-col justify-center gap-2">
+    <div class="flex gap-1 w-full">
+      <div class="flex flex-col items-center min-w-[48px] lesson-time-col justify-center gap-2">
         <span class="text-2xl font-extrabold text-on-surface dark:text-white">${startTime}</span>
         <span class="text-sm font-semibold text-on-surface-variant/60 dark:text-slate-400">${endTime}</span>
       </div>
-      <div class="flex-grow flex flex-col min-w-0">
+      <div class="flex-1 flex flex-col min-w-0">
         <div class="flex flex-wrap items-center gap-2 mb-2">
           ${typeBadge}
           <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
@@ -3398,10 +3464,10 @@ card.innerHTML = `
             <span>Ауд. ${l.room || '—'}</span>
           </span>
         </div>
-        <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${l.subject}</h3>
+        <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${escapeHtml(l.subject)}</h3>
         <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
           <span class="material-symbols-outlined text-sm text-slate-400 shrink-0">${l.isTeacher ? 'groups' : 'person'}</span>
-          <span class="truncate">${l.teacher || '—'}</span>
+           <span class="teacher-text flex-1">${escapeHtml(displayTeacher)}</span>
         </p>
       </div>
     </div>
@@ -4089,18 +4155,14 @@ card.innerHTML = `
       }
     });
     
-    if (incomeDot) {
-      if (hasAnyFutureIntersection) {
-        incomeDot.classList.remove("hidden");
-        incomeToggle.classList.add("income-blink");
-        const bottomIncomeBtn = document.getElementById("bottom-income-btn");
-        if (bottomIncomeBtn) bottomIncomeBtn.classList.add("income-blink");
-      } else {
-        incomeDot.classList.add("hidden");
-        incomeToggle.classList.remove("income-blink");
-        const bottomIncomeBtn = document.getElementById("bottom-income-btn");
-        if (bottomIncomeBtn) bottomIncomeBtn.classList.remove("income-blink");
-      }
+    if (hasAnyFutureIntersection) {
+      incomeToggle.classList.add("income-red");
+      const bottomIncomeBtn = document.getElementById("bottom-income-btn");
+      if (bottomIncomeBtn) bottomIncomeBtn.classList.add("income-red");
+    } else {
+      incomeToggle.classList.remove("income-red");
+      const bottomIncomeBtn = document.getElementById("bottom-income-btn");
+      if (bottomIncomeBtn) bottomIncomeBtn.classList.remove("income-red");
     }
   };
 
@@ -4612,7 +4674,13 @@ card.innerHTML = `
         badge.style.color = getContrastColor(lessonColor);
         badge.style.borderColor = lessonColor;
         badge.innerText = `${l.time} ${getShortSubjectName(l)}`;
-        badge.title = `${l.subject} (${l.type})\n${l.time}\nАуд. ${l.room}\n${l.teacher}`;
+        
+        // В режиме преподавателя группы отображаются в поле teacher через запятую
+        const displayTeacherForBadge = l.isTeacher && l.teacher
+          ? l.teacher.split(/[\n\r,;]+|\s{2,}/).join(', ')
+          : (l.teacher || '—');
+        
+        badge.title = `${l.subject} (${shortenLessonType(l.type)})\n${l.time}\nАуд. ${l.room}\n${displayTeacherForBadge}`;
         container.appendChild(badge);
       });
 

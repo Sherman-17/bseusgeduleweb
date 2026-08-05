@@ -1,0 +1,36 @@
+[Cache] Загружен кэш из файла: d:\VS\fullScheduleCache.json
+Server is running at http://0.0.0.0:3000
+[Cache] Загружен кэш с 15479 записями.
+[FullSchedule] Начинаем сборку полной копии расписания...
+[BSEU List] Failed for __id.22.main.inpFldsA.GetForms: Error: HTTP status 500
+    at fetchWithRetry (d:\VS\server.js:206:17)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async fetchBseuList (d:\VS\server.js:261:22)
+    at async getFacultyGroups (d:\VS\server.js:555:17)
+    at async Promise.allSettled (index 15)
+    at async d:\VS\server.js:696:28
+[FullSchedule] Факультет 535: HTTP status 500
+[BSEU List] Failed for __id.22.main.inpFldsA.GetForms: Error: HTTP status 500
+    at fetchWithRetry (d:\VS\server.js:206:17)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async fetchBseuList (d:\VS\server.js:261:22)
+    at async getFacultyGroups (d:\VS\server.js:555:17)
+    at async Promise.allSettled (index 11)
+    at async d:\VS\server.js:696:28
+[FullSchedule] Факультет 450: HTTP status 500
+[BSEU List] Failed for __id.22.main.inpFldsA.GetForms: Error: HTTP status 500
+    at fetchWithRetry (d:\VS\server.js:206:17)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async fetchBseuList (d:\VS\server.js:261:22)
+    at async getFacultyGroups (d:\VS\server.js:555:17)
+    at async Promise.allSettled (index 12)
+    at async d:\VS\server.js:696:28
+[FullSchedule] Факультет 530: HTTP status 500
+[BSEU List] Failed for __id.22.main.inpFldsA.GetForms: Error: HTTP status 500
+    at fetchWithRetry (d:\VS\server.js:206:17)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async fetchBseuList (d:\VS\server.js:261:22)
+    at async getFacultyGroups (d:\VS\server.js:555:17)
+    at async Promise.allSettled (index 14)
+    at async d:\VS\server.js:696:28
+[FullSchedule] Факультет 497: HTTP status 500
