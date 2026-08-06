@@ -449,25 +449,42 @@ function parseScheduleHtml(html) {
           clone.find('.teacher, .teacher.dd').remove();
           subject = clone.text().replace(/,\s*$/, '').trim();
         }
-        if (rightCell.length) {
-          room = rightCell.text().trim();
-        } else if (subject) {
-          const subgroupRooms = [];
+        // Если пара разбита на подгруппы (строки с td.sg), создаём отдельную
+        // карточку для каждой подгруппы со своим преподавателем и аудиторией,
+        // вместо того чтобы склеивать все аудитории в одну строку.
+        const subgroupLessons = [];
+        if (subject) {
           for (let j = i + 1; j < rowArr.length; j++) {
             const subRow = $(rowArr[j]);
             if (subRow.find('td.wday').length) break;
             const subCells = subRow.find('td');
             if (subCells.length >= 3 && !subRow.find('td.sg').length) break;
+            const sgCell = subRow.find('td.sg');
+            if (!sgCell.length) continue;
+            const subgroup = sgCell.text().trim();
+            let subTeacher = '';
+            const subTeacherSpan = subRow.find('.teacher, .teacher.dd, span[class*="teacher"]');
+            if (subTeacherSpan.length) subTeacher = subTeacherSpan.first().text().trim();
+            if (!subTeacher) subTeacher = extractTeacherFromCell(subRow, $);
             const lastCell = subCells.last();
-            if (lastCell.length) {
-              const r = lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim();
-              if (r && !subgroupRooms.includes(r)) subgroupRooms.push(r);
-            }
+            const subRoom = lastCell.length ? lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim() : '';
+            // Недели подгруппы могут отличаться от общих — берём из комментария BSEU
+            let subWeeks = weeks;
+            const cellHtml = lastCell.length ? lastCell.html() : '';
+            const wm = cellHtml && cellHtml.match(/week\[i\]:\s*\(([^)]+)\)/i);
+            if (wm) subWeeks = '(' + wm[1].trim() + ')';
+            subgroupLessons.push({
+              day: currentDay || "Вне сетке", time, weeks: subWeeks, subject, type,
+              teacher: (subTeacher || teacher).trim(), room: subRoom, isTeacher: false, subgroup
+            });
           }
-          room = subgroupRooms.join(', ');
         }
-        if (subject && time) {
-          lessons.push({ day: currentDay || "Вне сетки", time, weeks, subject, type, teacher, room, isTeacher: false });
+
+        if (subgroupLessons.length) {
+          subgroupLessons.forEach(l => lessons.push(l));
+        } else if (subject && time) {
+          room = rightCell.length ? rightCell.text().trim() : '';
+          lessons.push({ day: currentDay || "Вне сетке", time, weeks, subject, type, teacher, room, isTeacher: false });
         }
       }
     }

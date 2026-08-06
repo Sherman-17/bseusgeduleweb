@@ -1,0 +1,32 @@
+[BSEU List] Failed for __id.22.main.inpFldsA.GetForms: Error: HTTP status 500
+    at fetchWithRetry (D:\VS\server.js:207:17)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async fetchBseuList (D:\VS\server.js:262:22)
+    at async getFacultyGroups (D:\VS\server.js:575:17)
+    at async Promise.allSettled (index 14)
+    at async D:\VS\server.js:716:28
+[FullSchedule] Факультет 497: HTTP status 500
+[BSEU List] Failed for __id.22.main.inpFldsA.GetForms: Error: HTTP status 500
+    at fetchWithRetry (D:\VS\server.js:207:17)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async fetchBseuList (D:\VS\server.js:262:22)
+    at async getFacultyGroups (D:\VS\server.js:575:17)
+    at async Promise.allSettled (index 12)
+    at async D:\VS\server.js:716:28
+[FullSchedule] Факультет 530: HTTP status 500
+[BSEU List] Failed for __id.22.main.inpFldsA.GetForms: Error: HTTP status 500
+    at fetchWithRetry (D:\VS\server.js:207:17)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async fetchBseuList (D:\VS\server.js:262:22)
+    at async getFacultyGroups (D:\VS\server.js:575:17)
+    at async Promise.allSettled (index 15)
+    at async D:\VS\server.js:716:28
+[FullSchedule] Факультет 535: HTTP status 500
+[BSEU List] Failed for __id.22.main.inpFldsA.GetForms: Error: HTTP status 500
+    at fetchWithRetry (D:\VS\server.js:207:17)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async fetchBseuList (D:\VS\server.js:262:22)
+    at async getFacultyGroups (D:\VS\server.js:575:17)
+    at async Promise.allSettled (index 11)
+    at async D:\VS\server.js:716:28
+[FullSchedule] Факультет 450: HTTP status 500

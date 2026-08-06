@@ -1317,11 +1317,15 @@ document.addEventListener("DOMContentLoaded", async () => {
                  <div class="flex-1 flex flex-col min-w-0">
                   <div class="flex flex-wrap items-center gap-2 mb-2 lesson-meta-row">
                     ${typeBadge}
-                    <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
-                      <span class="material-symbols-outlined text-base">location_on</span>
-                      <span>Ауд. ${escapeHtml(room)}</span>
-                    </span>
-                  </div>
+                     <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
+                       <span class="material-symbols-outlined text-base">location_on</span>
+                       <span>Ауд. ${escapeHtml(room)}</span>
+                     </span>
+                      ${lesson.subgroup ? `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-widest bg-surface-container-high dark:bg-slate-800 text-on-surface-variant dark:text-slate-300" title="Подгруппа">
+                        <span class="material-symbols-outlined text-xs">groups_2</span>
+                        <span>${escapeHtml((lesson.subgroup || '').replace(/^\s*подгр\.?\s*/i, ''))}</span>
+                      </span>` : ''}
+                    </div>
                   <h3 class="subject-line text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug min-w-0 break-words">${escapeHtml(subject)}</h3>
                    <p class="teacher-line text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
                      <span class="material-symbols-outlined text-base text-slate-400 shrink-0">${lesson.isTeacher ? 'groups' : 'person'}</span>
@@ -2335,8 +2339,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       ? l.teacher.split(/[\n\r,;]+|\s{2,}/).join(', ')
       : (l.teacher || '—');
     
-    card.setAttribute("data-search", `${l.subject} ${displayTeacher}`.toLowerCase());
-    card._lesson = l;
+        card.setAttribute("data-search", `${l.subject} ${displayTeacher} ${l.subgroup || ''}`.toLowerCase());
+        card._lesson = l;
     card.dataset.attKey = getAttendanceKey(l);
 
     const timeParts = l.time.split("-");
@@ -2345,6 +2349,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const typeBadge = l.type ? `<span class="${styles.badge} text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded">${shortenLessonType(l.type)}</span>` : "";
     const weeksBadge = (l.weeks && showWeeks) ? `<span class="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-bold px-2 py-1 rounded">Недели: ${l.weeks}</span>` : "";
+    // Бейдж подгруппы (например «Подгруппа 1») — показываем на парах, где есть подгруппы
+    const subgroupBadge = l.subgroup ? `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-widest bg-surface-container-high dark:bg-slate-800 text-on-surface-variant dark:text-slate-300" title="Подгруппа">
+      <span class="material-symbols-outlined text-xs">groups_2</span>
+      <span>${escapeHtml((l.subgroup || '').replace(/^\s*подгр\.?\s*/i, ''))}</span>
+    </span>` : '';
 
     // Домашнее задание для этой пары (если есть) - только в режиме группы по умолчанию
     const hwText = getHomeworkForLesson(l);
@@ -2379,6 +2388,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                <div class="flex-1 flex flex-col min-w-0">
                  <div class="flex flex-wrap items-center gap-2 mb-2 lesson-meta-row">
                   ${typeBadge}
+                  ${subgroupBadge}
                   <span class="text-primary dark:text-[#b5bcff] font-bold text-xs md:text-sm flex items-center gap-1">
                     <span class="material-symbols-outlined text-base">location_on</span>
                     <span>Ауд. ${l.room || '—'}</span>
@@ -2685,6 +2695,10 @@ document.addEventListener("DOMContentLoaded", async () => {
                     <span class="material-symbols-outlined text-base">location_on</span>
                     <span>Ауд. ${l.room || '—'}</span>
                   </span>
+                  ${l.subgroup ? `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-widest bg-surface-container-high dark:bg-slate-800 text-on-surface-variant dark:text-slate-300" title="Подгруппа">
+                    <span class="material-symbols-outlined text-xs">groups_2</span>
+                    <span>${escapeHtml((l.subgroup || '').replace(/^\s*подгр\.?\s*/i, ''))}</span>
+                  </span>` : ''}
                 </div>
                 <h3 class="text-lg md:text-xl font-bold text-on-surface dark:text-white mb-2 leading-snug flex-shrink-0">${escapeHtml(l.subject)}</h3>
                 <p class="text-on-surface dark:text-slate-200 font-semibold text-sm flex items-center gap-2 flex-shrink-0">
@@ -3919,8 +3933,13 @@ card.innerHTML = `
     });
   }
 
-  // Кнопка карандаш - открыть модалку для изменения группы по умолчанию
-  navEditGroup.addEventListener("click", async () => {
+  // Кнопка карандаш - открыть модалку для изменения группы по умолчанию.
+  // Логика вынесена в глобальную функцию window.openEditGroupModal, чтобы её
+  // мог вызывать и пункт меню аккаунта (#account-menu-edit-group), который
+  // находится в другом замыкании (initAccount) и не видит локальные
+  // переменные этого блока (isEditingGroup, modalFaculty, populateFacultySelect
+  // и т.д.) — иначе клик по пункту меню бросал ReferenceError.
+  window.openEditGroupModal = async function openEditGroupModal() {
     isEditingGroup = true;
     const primaryGroupStr = localStorage.getItem("bseu_primary_group");
     if (!primaryGroupStr) return;
@@ -3967,6 +3986,10 @@ card.innerHTML = `
     } catch (e) {
       showError("Ошибка загрузки данных: " + e.message);
     }
+  };
+
+  navEditGroup.addEventListener("click", () => {
+    window.openEditGroupModal();
   });
 
   // Закрытие модалки при клике на пустое место (только в режиме редактирования)
@@ -5688,37 +5711,13 @@ if (installBtn) {
       localStorage.setItem("theme", "dark");
     }
   });
-  if (menuEditGroup) menuEditGroup.addEventListener('click', async () => {
+  if (menuEditGroup) menuEditGroup.addEventListener('click', () => {
     hideMenu();
-    isEditingGroup = true;
-    const primaryGroupStr = localStorage.getItem("bseu_primary_group");
-    if (!primaryGroupStr) return;
-    const primaryGroup = JSON.parse(primaryGroupStr);
-    populateFacultySelect(modalFaculty);
-    resetSelect(modalForm, "Загрузка форм...");
-    resetSelect(modalCourse, "Выберите курс");
-    resetSelect(modalGroup, "Выберите группу");
-    modalSaveBtn.disabled = true;
-    firstTimeModal.classList.remove("hidden");
-    modalTitle.textContent = "Изменить группу по умолчанию";
-    const savedFaculty = primaryGroup.faculty;
-    const savedForm = primaryGroup.form;
-    const savedCourse = primaryGroup.course;
-    const savedGroup = primaryGroup.group;
-    ensureSelectValue(modalFaculty, savedFaculty);
-    if (savedFaculty) {
-      modalFaculty.dispatchEvent(new Event('change', { bubbles: true }));
-      if (savedForm) {
-        modalForm.value = savedForm;
-        modalForm.dispatchEvent(new Event('change', { bubbles: true }));
-        if (savedCourse) {
-          modalCourse.value = savedCourse;
-          modalCourse.dispatchEvent(new Event('change', { bubbles: true }));
-          if (savedGroup) {
-            modalGroup.value = savedGroup;
-          }
-        }
-      }
+    // Вызываем глобальную функцию, определённую в замыкании DOMContentLoaded.
+    // Она открывает модалку изменения группы по умолчанию и загружает
+    // каскадные списки (факультет → форма → курс → группа).
+    if (typeof window.openEditGroupModal === 'function') {
+      window.openEditGroupModal();
     }
   });
   if (menuLogout) menuLogout.addEventListener('click', async () => {
