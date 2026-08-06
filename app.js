@@ -575,6 +575,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   ];
   let incomeShifts = (() => { try { return JSON.parse(localStorage.getItem('shifts')); } catch(e) { return null; } })() || [];
   const getBtn = document.getElementById("get-btn");
+  const defaultGroupShowBtn = document.getElementById("default-group-show-btn");
   
   const groupSelectionDiv = document.getElementById("group-selection");
   const teacherSelectionDiv = document.getElementById("teacher-selection");
@@ -748,11 +749,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     updateModeButtons();
     updateWeekButtonsState();
     
+    // Очищаем расписание предыдущего режима, чтобы оно не мелькало
+    scheduleContainer.innerHTML = "";
+    window.cachedLessons = [];
+    scheduleTitle.textContent = "";
+    scheduleHeaderRow.classList.add("hidden");
+    dayStripContainer.classList.add("hidden");
+    
     // Скрываем списки подсказок
     autocompleteList.innerHTML = "";
     autocompleteList.classList.add("hidden");
     closeRoomDropdown();
     updatePrimaryGroupButtonVisibility();
+    updateDefaultGroupShowButton();
     showWidget();
     // Синхронизируем переключатели пропусков с режимом (показать/скрыть)
     refreshAttendanceToggles();
@@ -1030,8 +1039,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     isDefaultGroupActive = false; // ручной выбор группы — не основная группа по умолчанию
     setDefaultGroupActiveState(false);
     updateDefaultGroupModeClass();
+    updateDefaultGroupShowButton();
     getSchedule();
   });
+
+  if (defaultGroupShowBtn) {
+    defaultGroupShowBtn.addEventListener("click", () => {
+      getSchedule();
+    });
+  }
 
   // Общий вызов API к нашему чистому бэкенду
   async function apiRequest(action, params = {}) {
@@ -3038,10 +3054,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       modeSemesterBtn.classList.remove("hidden");
     }
     
-    // Кнопки "Экзамены" и "Пропуски" рядом с неделями — только в режиме
+    // Кнопка "Экзамены" в панели инструментов — только в режиме
+    // «По группе» и только для основной группы по умолчанию.
+    if (isGroupTab && isDefaultGroupActive) {
+      examsToggle.classList.remove("hidden");
+    } else {
+      examsToggle.classList.add("hidden");
+    }
+    
+    // Кнопка "Пропуски" рядом с неделями — только в режиме
     // «По группе», а учёт пропусков — строго для основной группы по умолчанию.
     if (isGroupTab) {
-      examsToggle.classList.remove("hidden");
       if (isDefaultGroupActive) {
         absenceToggle.classList.remove("hidden");
       } else {
@@ -3050,7 +3073,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (absencePanel) absencePanel.classList.add("hidden");
       }
     } else {
-      examsToggle.classList.add("hidden");
       absenceToggle.classList.add("hidden");
       // Скрываем панель пропусков при выходе из режима основной группы
       if (absencePanel) absencePanel.classList.add("hidden");
@@ -3524,6 +3546,17 @@ card.innerHTML = `
     if (navDefaultLabel) navDefaultLabel.textContent = shortenGroupName(groupName);
   }
 
+  function updateDefaultGroupShowButton() {
+    if (!defaultGroupShowBtn) return;
+    const primaryGroupStr = localStorage.getItem("bseu_primary_group");
+    const isGroupTab = document.getElementById("tab-group").classList.contains("segment-btn-active");
+    if (primaryGroupStr && isGroupTab && isDefaultGroupActive) {
+      defaultGroupShowBtn.classList.remove("hidden");
+    } else {
+      defaultGroupShowBtn.classList.add("hidden");
+    }
+  }
+
   function setDefaultGroupActiveState(active) {
     if (!navDefaultGroup) return;
     const icon = document.getElementById("nav-default-group-icon");
@@ -3548,6 +3581,7 @@ card.innerHTML = `
     navEditGroup.classList.add("hidden");
     const bottomDefaultBtn = document.getElementById("bottom-default-group-btn");
     if (bottomDefaultBtn) bottomDefaultBtn.classList.add("hidden");
+    if (defaultGroupShowBtn) defaultGroupShowBtn.classList.add("hidden");
     setTimeout(() => {
       navPrimaryGroupWrapper.classList.add("hidden");
     }, 300);
@@ -3560,6 +3594,7 @@ card.innerHTML = `
       navPrimaryGroupWrapper.classList.add("hidden");
       navEditGroup.classList.add("hidden");
       if (navDefaultGroup) navDefaultGroup.classList.add("hidden");
+      if (defaultGroupShowBtn) defaultGroupShowBtn.classList.add("hidden");
       updateModeButtons();
       return;
     }
@@ -3612,6 +3647,7 @@ card.innerHTML = `
     isDefaultGroupActive = true; // загружается основная группа по умолчанию
     setDefaultGroupActiveState(true);
     updateDefaultGroupModeClass();
+    updateDefaultGroupShowButton();
     // Показываем элементы режима «По группе», которые иначе скрыты до
     // первого вызова setActiveTab("group"). Без этого расписание
     // рендерится в скрытый контейнер и не видно до повторного переключения.
@@ -3723,6 +3759,7 @@ card.innerHTML = `
 
     await getSchedule(false, { silent: !!opts.silent });
     updatePrimaryGroupButtonVisibility();
+    updateDefaultGroupShowButton();
     updateModeButtons();
     refreshAttendanceToggles();
 
@@ -3858,6 +3895,7 @@ card.innerHTML = `
         scheduleToolbar.classList.toggle("hidden", !(window.cachedLessons && window.cachedLessons.length));
       }
       updatePrimaryGroupButtonVisibility();
+      updateDefaultGroupShowButton();
     }
 
     // Фоновое обновление без спиннера (перезапишет кэш при успехе).
