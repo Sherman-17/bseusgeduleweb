@@ -570,9 +570,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let isDefaultGroupActive = false; // true только когда загружена основная группа по умолчанию
   // Данные режима дохода (объявлены здесь, чтобы быть доступными
   // рендеру расписания группы, который может вызываться до блока доходов)
-  let incomeJobs = (() => { try { return JSON.parse(localStorage.getItem('jobs')); } catch(e) { return null; } })() || [
-    { id: '1', name: 'Основная работа', rate: 12.50, currency: 'BYN', color: '#98A2F3' }
-  ];
+  let incomeJobs = (() => { try { return JSON.parse(localStorage.getItem('jobs')); } catch(e) { return null; } })() || [];
   let incomeShifts = (() => { try { return JSON.parse(localStorage.getItem('shifts')); } catch(e) { return null; } })() || [];
   const getBtn = document.getElementById("get-btn");
   const defaultGroupShowBtn = document.getElementById("default-group-show-btn");
@@ -4035,6 +4033,9 @@ card.innerHTML = `
   const incomeSettingsBtn = document.getElementById("income-settings-btn");
   const incomeSettingsModal = document.getElementById("income-settings-modal");
   const closeIncomeSettingsBtn = document.getElementById("close-income-settings-btn");
+  const incomeIntroModal = document.getElementById("income-intro-modal");
+  const incomeIntroSkipBtn = document.getElementById("income-intro-skip");
+  const incomeIntroAddJobBtn = document.getElementById("income-intro-add-job");
   
   const currencySelect = document.getElementById("currency-select");
   const periodStartDay = document.getElementById("period-start-day");
@@ -4075,9 +4076,7 @@ card.innerHTML = `
   const multicurrencyToggle = document.getElementById("multicurrency-toggle");
 
   // Переменные состояния Доходов
-  incomeJobs = (() => { try { return JSON.parse(localStorage.getItem('jobs')); } catch(e) { return null; } })() || [
-      { id: '1', name: 'Основная работа', rate: 12.50, currency: 'BYN', color: '#98A2F3' }
-    ];
+  incomeJobs = (() => { try { return JSON.parse(localStorage.getItem('jobs')); } catch(e) { return null; } })() || [];
   incomeShifts = (() => { try { return JSON.parse(localStorage.getItem('shifts')); } catch(e) { return null; } })() || [];
   let incomeCurrentCurrency = localStorage.getItem('currency') || 'BYN';
   let incomeStartDay = parseInt(localStorage.getItem('startDay')) || 1;
@@ -4099,6 +4098,48 @@ card.innerHTML = `
   window.addEventListener('click', (event) => {
     if (event.target === incomeSettingsModal) closeIncomeSettings();
     if (event.target === shiftModal) closeShiftModal();
+    if (event.target === incomeIntroModal) hideIncomeIntroModal();
+  });
+
+  function showIncomeIntroModal() {
+    if (!incomeIntroModal) return;
+    incomeIntroModal.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      incomeIntroModal.classList.remove('opacity-0');
+      const card = incomeIntroModal.querySelector('div');
+      if (card) {
+        card.classList.remove('scale-95');
+        card.classList.add('scale-100');
+      }
+    });
+  }
+
+  function hideIncomeIntroModal() {
+    if (!incomeIntroModal) return;
+    incomeIntroModal.classList.remove('opacity-100');
+    incomeIntroModal.classList.add('opacity-0');
+    const card = incomeIntroModal.querySelector('div');
+    if (card) {
+      card.classList.remove('scale-100');
+      card.classList.add('scale-95');
+    }
+    setTimeout(() => incomeIntroModal.classList.add('hidden'), 300);
+    localStorage.setItem('bseu_income_intro_seen', '1');
+  }
+
+  if (incomeIntroSkipBtn) {
+    incomeIntroSkipBtn.addEventListener('click', hideIncomeIntroModal);
+  }
+  if (incomeIntroAddJobBtn) {
+    incomeIntroAddJobBtn.addEventListener('click', () => {
+      hideIncomeIntroModal();
+      openIncomeSettings();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && incomeIntroModal && !incomeIntroModal.classList.contains('hidden')) {
+      hideIncomeIntroModal();
+    }
   });
 
   // Вспомогательные функции для расчёта пересечений
@@ -4264,6 +4305,10 @@ card.innerHTML = `
       // Сбрасываем отображение верхней панели выбора, если она была открыта
       loadRates();
       updateIncomeUI();
+
+      if (!localStorage.getItem('bseu_income_intro_seen')) {
+        showIncomeIntroModal();
+      }
     } else {
       exitIncomeMode();
     }

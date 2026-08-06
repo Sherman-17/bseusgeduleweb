@@ -605,23 +605,25 @@
       }
     }
 
-    /* Full-screen modals on mobile */
-    @media (max-width: 480px) {
-      #income-settings-modal > div,
-      #shift-modal > div,
-      #first-time-modal > div {
-        max-width: 100% !important;
-        margin: 0 8px !important;
-        max-height: 85vh !important;
-        padding: 20px !important;
-      }
-      #income-settings-modal,
-      #shift-modal,
-      #first-time-modal {
-        padding: 8px !important;
-        align-items: center !important;
-      }
-    }
+     /* Full-screen modals on mobile */
+     @media (max-width: 480px) {
+       #income-settings-modal > div,
+       #shift-modal > div,
+       #first-time-modal > div,
+       #income-intro-modal > div {
+         max-width: 100% !important;
+         margin: 0 8px !important;
+         max-height: 85vh !important;
+         padding: 20px !important;
+       }
+       #income-settings-modal,
+       #shift-modal,
+       #first-time-modal,
+       #income-intro-modal {
+         padding: 8px !important;
+         align-items: center !important;
+       }
+     }
 
     /* Schedule toolbar mobile */
     @media (max-width: 480px) {
@@ -2075,6 +2077,44 @@
         <button id="modal-save-btn" disabled class="w-full mt-4 sm:mt-6 signature-gradient text-on-primary py-3 sm:py-4 rounded-xl font-bold tracking-wide hover:opacity-90 hover:shadow-lg hover:shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base">
           <span>Сохранить выбор</span>
           <span class="material-symbols-outlined text-base sm:text-lg">check_circle</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно первого входа в режим дохода -->
+  <div id="income-intro-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-3 sm:p-4 hidden transition-opacity duration-300 opacity-0">
+    <div class="bg-white dark:bg-slate-900 border border-outline-variant/15 dark:border-slate-800 rounded-3xl p-5 sm:p-6 md:p-8 max-w-md w-full shadow-2xl transform scale-95 transition-all duration-300">
+      <div class="text-center mb-4 sm:mb-6">
+        <div class="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 mx-auto mb-3 sm:mb-4 flex items-center justify-center">
+          <span class="material-symbols-outlined text-2xl sm:text-3xl">monetization_on</span>
+        </div>
+        <h3 class="text-xl sm:text-2xl font-headline font-bold text-on-surface dark:text-white">Учёт рабочего времени</h3>
+        <p class="text-on-surface-variant/80 dark:text-slate-400 text-xs sm:text-sm mt-1 sm:mt-2 leading-relaxed">Отслеживайте смены, считайте доход и видите статистику по работам прямо в календаре.</p>
+      </div>
+      
+      <div class="space-y-2 sm:space-y-3 mb-4 sm:mb-6">
+        <div class="flex items-start gap-2 sm:gap-3 text-xs sm:text-sm text-on-surface-variant dark:text-slate-400">
+          <span class="material-symbols-outlined text-base sm:text-lg text-emerald-600 dark:text-emerald-400 mt-0.5">add_circle</span>
+          <span>Добавьте работу и ставку в час</span>
+        </div>
+        <div class="flex items-start gap-2 sm:gap-3 text-xs sm:text-sm text-on-surface-variant dark:text-slate-400">
+          <span class="material-symbols-outlined text-base sm:text-lg text-emerald-600 dark:text-emerald-400 mt-0.5">event</span>
+          <span>Ставьте смены на календаре</span>
+        </div>
+        <div class="flex items-start gap-2 sm:gap-3 text-xs sm:text-sm text-on-surface-variant dark:text-slate-400">
+          <span class="material-symbols-outlined text-base sm:text-lg text-emerald-600 dark:text-emerald-400 mt-0.5">show_chart</span>
+          <span>Смотрите доход за период и по работам</span>
+        </div>
+      </div>
+      
+      <div class="flex flex-col sm:flex-row gap-2 sm:gap-3">
+        <button id="income-intro-skip" class="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl text-sm sm:text-base font-semibold text-on-surface-variant dark:text-slate-300 bg-surface-container-low dark:bg-slate-800 hover:bg-surface-container-high dark:hover:bg-slate-700 transition-all cursor-pointer">
+          Позже
+        </button>
+        <button id="income-intro-add-job" class="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl text-sm sm:text-base font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-all cursor-pointer flex items-center justify-center gap-2">
+          <span class="material-symbols-outlined text-base sm:text-lg">add</span>
+          <span>Добавить работу</span>
         </button>
       </div>
     </div>
