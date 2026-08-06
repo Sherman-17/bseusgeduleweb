@@ -755,6 +755,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     scheduleTitle.textContent = "";
     scheduleHeaderRow.classList.add("hidden");
     dayStripContainer.classList.add("hidden");
+    scheduleToolbar.classList.add("hidden");
     
     // Скрываем списки подсказок
     autocompleteList.innerHTML = "";
