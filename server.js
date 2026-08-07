@@ -824,34 +824,30 @@ async function buildFullSchedule() {
               audienceScheduleCache[l.room] = [];
             }
             audienceScheduleCache[l.room].push(entry);
-          }
         }
-        }
-    // === Сверка с предыдущей копией расписания ===
-    // Считаем компактную подпись новой копии и сравниваем с предыдущей.
-    // Если изменений нет — оставляем старый кэш (и время его обновления),
-    // чтобы не перезаписывать файл и не "дёргать" клиентов без причины.
-    const newSignature = scheduleSignature(all);
-    const oldSignature = scheduleSignature(fullScheduleCache);
-    const changed = !fullScheduleCache || newSignature !== oldSignature;
-
-    if (changed) {
-      fullScheduleCache = all;
-      fullScheduleUpdatedAt = Date.now();
-      fullScheduleError = null;
-      try {
-        fs.writeFileSync(CACHE_FILE, JSON.stringify({
-          fullScheduleCache,
-          audienceScheduleCache,
-          updatedAt: fullScheduleUpdatedAt,
-          audienceScheduleUpdatedAt
-        }, null, 2));
-        console.log('[Cache] Расписание изменилось — кэш обновлён и сохранён в файл:', CACHE_FILE);
-      } catch (e) {
-        console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
       }
-    } else {
-      
+    }
+  }
+
+  // === Сверка с предыдущей копией расписания ===
+  const newSignature = scheduleSignature(all);
+  const oldSignature = scheduleSignature(fullScheduleCache);
+  const changed = !fullScheduleCache || newSignature !== oldSignature;
+
+  if (changed) {
+    fullScheduleCache = all;
+    fullScheduleUpdatedAt = Date.now();
+    fullScheduleError = null;
+    try {
+      fs.writeFileSync(CACHE_FILE, JSON.stringify({
+        fullScheduleCache,
+        audienceScheduleCache,
+        updatedAt: fullScheduleUpdatedAt,
+        audienceScheduleUpdatedAt
+      }, null, 2));
+      console.log('[Cache] Расписание изменилось — кэш обновлён и сохранён в файл:', CACHE_FILE);
+    } catch (e) {
+      console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
     }
   }
 
