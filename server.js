@@ -142,7 +142,7 @@ app.post('/api/sync', (req, res) => {
 
 // ===== File-based cache layer (для расписания BSEU) =====
 const CACHE_DIR = path.join(__dirname, '.cache');
-const CACHE_VERSION = 'v4'; // Увеличить при изменении логики парсинга
+const CACHE_VERSION = 'v5'; // Увеличить при изменении логики парсинга
 function ensureCacheDir() {
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -696,7 +696,8 @@ function scheduleSignature(entries) {
     (e.audience||'').trim(),
     (e.startTime||''),
     (e.endTime||''),
-    (e.dates||[]).slice().sort().join(',')
+    (e.dates||[]).slice().sort().join(','),
+    (e.subgroup||'').trim().toLowerCase()
   ].join('|')).sort();
   return parts.join(';');
 }
@@ -791,7 +792,8 @@ async function buildFullSchedule() {
           teacher: l.teacher || '',
           groupText: g.groupText,
           startTime: start || '',
-          endTime: end || ''
+          endTime: end || '',
+          subgroup: l.subgroup || ''
         };
         all.push(entry);
         
@@ -901,7 +903,8 @@ async function getAudienceScheduleBseu(audience, date) {
     `${(p.type || '').trim().toLowerCase()}|` +
     `${(p.startTime || '').trim()}|` +
     `${(p.endTime || '').trim()}|` +
-    `${(p.teacher || '').trim().toLowerCase()}`;
+    `${(p.teacher || '').trim().toLowerCase()}|` +
+    `${(p.subgroup || '').trim().toLowerCase()}`;
   const byKey = new Map();
   for (const p of matched) {
     const k = keyOf(p);
@@ -915,7 +918,8 @@ async function getAudienceScheduleBseu(audience, date) {
         groups: [],
         audience: mr.join(', '),
         startTime: p.startTime,
-        endTime: p.endTime
+        endTime: p.endTime,
+        subgroup: p.subgroup || ''
       };
       byKey.set(k, card);
     } else {
