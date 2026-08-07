@@ -783,27 +783,49 @@ async function buildFullSchedule() {
         const allValid = roomParts.every(part => /\d/.test(part));
         if (!allValid) continue;
         const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
-        const entry = {
-          audience: l.room,
-          audienceTokens: audienceTokens(l.room),
-          dates,
-          subject: l.subject,
-          type: l.type,
-          teacher: l.teacher || '',
-          groupText: g.groupText,
-          startTime: start || '',
-          endTime: end || '',
-          subgroup: l.subgroup || ''
-        };
-        all.push(entry);
-        
-        if (l.room) {
-              if (!audienceScheduleCache[l.room]) {
-                audienceScheduleCache[l.room] = [];
-              }
-              audienceScheduleCache[l.room].push(entry);
+
+        // Если несколько аудиторий и нет подгруппы - создаём отдельные записи для каждой аудитории
+        if (roomParts.length > 1 && !l.subgroup) {
+          for (const singleRoom of roomParts) {
+            const entry = {
+              audience: singleRoom,
+              audienceTokens: audienceTokens(singleRoom),
+              dates,
+              subject: l.subject,
+              type: l.type,
+              teacher: l.teacher || '',
+              groupText: g.groupText,
+              startTime: start || '',
+              endTime: end || '',
+              subgroup: l.subgroup || ''
+            };
+            all.push(entry);
+            if (!audienceScheduleCache[singleRoom]) {
+              audienceScheduleCache[singleRoom] = [];
             }
+            audienceScheduleCache[singleRoom].push(entry);
           }
+        } else {
+          const entry = {
+            audience: l.room,
+            audienceTokens: audienceTokens(l.room),
+            dates,
+            subject: l.subject,
+            type: l.type,
+            teacher: l.teacher || '',
+            groupText: g.groupText,
+            startTime: start || '',
+            endTime: end || '',
+            subgroup: l.subgroup || ''
+          };
+          all.push(entry);
+          if (l.room) {
+            if (!audienceScheduleCache[l.room]) {
+              audienceScheduleCache[l.room] = [];
+            }
+            audienceScheduleCache[l.room].push(entry);
+          }
+        }
         }
     // === Сверка с предыдущей копией расписания ===
     // Считаем компактную подпись новой копии и сравниваем с предыдущей.
@@ -829,13 +851,14 @@ async function buildFullSchedule() {
         console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
       }
     } else {
-      console.log('[Cache] Изменений в расписании BSEU нет — оставляем прежний кэш.');
+      
     }
-    
-    console.log(`[FullSchedule] Готово: ${all.length} пар, ${allGroups.length} групп, за ${((Date.now() - t0) / 1000).toFixed(1)} с; изменения: ${changed ? 'да' : 'нет'}`);
-    fullScheduleBuilding = false;
-    return all;
-  })();
+  }
+
+  console.log(`[FullSchedule] Готово: ${all.length} пар, ${allGroups.length} групп, за ${((Date.now() - t0) / 1000).toFixed(1)} с; изменения: ${changed ? 'да' : 'нет'}`);
+  fullScheduleBuilding = false;
+  return all;
+})();
   
   fullSchedulePromise.catch(e => {
     console.error('[FullSchedule] Ошибка сборки:', e.message);
@@ -898,17 +921,24 @@ async function getAudienceScheduleBseu(audience, date) {
   // Объединяем карточки одной и той же пары (один предмет, тип, время и
   // преподаватель), идущей у нескольких групп одновременно (например, лекция),
   // в одну карточку со списком всех групп.
+  const matchedWithMR = matched.map(p => {
+    const mr = matchedRoomsOf(p.audience, hasSlash, targetRooms, queryTokens);
+    return { ...p, matchedRooms: mr };
+  });
+
   const keyOf = (p) =>
     `${(p.subject || '').trim().toLowerCase()}|` +
     `${(p.type || '').trim().toLowerCase()}|` +
     `${(p.startTime || '').trim()}|` +
     `${(p.endTime || '').trim()}|` +
     `${(p.teacher || '').trim().toLowerCase()}|` +
-    `${(p.subgroup || '').trim().toLowerCase()}`;
+    `${(p.subgroup || '').trim().toLowerCase()}|` +
+    `${p.matchedRooms.sort().join(',')}`;
+
   const byKey = new Map();
-  for (const p of matched) {
+  for (const p of matchedWithMR) {
     const k = keyOf(p);
-    const mr = matchedRoomsOf(p.audience, hasSlash, targetRooms, queryTokens);
+    const mr = p.matchedRooms;
     let card = byKey.get(k);
     if (!card) {
       card = {
@@ -922,10 +952,6 @@ async function getAudienceScheduleBseu(audience, date) {
         subgroup: p.subgroup || ''
       };
       byKey.set(k, card);
-    } else {
-      const existing = String(card.audience || '').split(',').map(s => s.trim()).filter(Boolean);
-      for (const r of mr) if (!existing.includes(r)) existing.push(r);
-      card.audience = existing.join(', ');
     }
     if (p.groupText && !card.groups.includes(p.groupText)) {
       card.groups.push(p.groupText);
