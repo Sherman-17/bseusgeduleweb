@@ -599,41 +599,164 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   const fs = require('fs');
   const iconv = require('iconv-lite');
   const cheerio = require('cheerio');
+  const Database = require('better-sqlite3');
+  const bcrypt = require('bcryptjs');
+  const crypto = require('crypto');
   const PORT = process.env.PORT || 3000;
 
-  // Используем __dirname для надежного разрешения пути к auth-модулю
-  const AUTH_MODULE_CANDIDATES = [
-    path.join(__dirname, 'server', 'auth'),
-    path.join(__dirname, '..', 'server', 'auth')
-  ];
+  const DB_PATH = path.join(__dirname, 'app.db');
+  const auth_db = new Database(DB_PATH);
+  auth_db.pragma('journal_mode = WAL');
 
-  var auth;
-  for (var i = 0; i < AUTH_MODULE_CANDIDATES.length; i++) {
-    try {
-      auth = require(AUTH_MODULE_CANDIDATES[i]);
-      console.log('[AUTH] Auth module loaded successfully from', AUTH_MODULE_CANDIDATES[i]);
-      break;
-    } catch (e) {
-      console.error('[AUTH] Failed to load auth module from', AUTH_MODULE_CANDIDATES[i], ':', e.message);
+  auth_db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      login TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sync_data (
+      user_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, kind),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS api_cache (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+
+  const SESSIONS = new Map();
+  const SESSION_TTL = 1000 * 60 * 60 * 24 * 30;
+
+  function normalizeLogin(login) {
+    return String(login || '').trim().toLowerCase();
+  }
+
+  function createSession(userId, login) {
+    const token = crypto.randomBytes(32).toString('hex');
+    SESSIONS.set(token, { userId, login, exp: Date.now() + SESSION_TTL });
+    return token;
+  }
+
+  function getSession(token) {
+    if (!token) return null;
+    const s = SESSIONS.get(token);
+    if (!s) return null;
+    if (s.exp < Date.now()) {
+      SESSIONS.delete(token);
+      return null;
+    }
+    return s;
+  }
+
+  function destroySession(token) {
+    if (token) SESSIONS.delete(token);
+  }
+
+  function findUserByLogin(login) {
+    const row = auth_db.prepare('SELECT * FROM users WHERE login = ?').get(normalizeLogin(login));
+    return row || null;
+  }
+
+  function registerUser(login, password) {
+    const norm = normalizeLogin(login);
+    if (norm.length < 3) throw new Error('Логин слишком короткий (минимум 3 символа)');
+    if (String(password || '').length < 4) throw new Error('Пароль слишком короткий (минимум 4 символа)');
+    if (findUserByLogin(norm)) throw new Error('Такой логин уже занят');
+    const hash = bcrypt.hashSync(password, 10);
+    const now = Date.now();
+    const info = auth_db.prepare('INSERT INTO users (login, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)')
+      .run(norm, hash, now, now);
+    return { id: info.lastInsertRowid, login: norm };
+  }
+
+  function verifyUser(login, password) {
+    const user = findUserByLogin(login);
+    if (!user) return null;
+    if (!bcrypt.compareSync(String(password || ''), user.password_hash)) return null;
+    return { id: user.id, login: user.login };
+  }
+
+  function deleteUser(userId) {
+    auth_db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    auth_db.prepare('DELETE FROM sync_data WHERE user_id = ?').run(userId);
+    for (const [token, s] of SESSIONS) {
+      if (s.userId === userId) SESSIONS.delete(token);
     }
   }
 
-  // Fallback search
-  if (!auth) {
-    try {
-      var searchDir = __dirname;
-      for (var depth = 0; depth < 5; depth++) {
-        var parent = path.dirname(searchDir);
-        var candidate = path.join(parent, 'server', 'auth');
-        try {
-          auth = require(candidate);
-          console.log('[AUTH] Auth module found via filesystem search at', candidate);
-          break;
-        } catch (e3) {}
-        searchDir = parent;
-      }
-    } catch (e4) {}
+  function getBlocks(userId) {
+    const rows = auth_db.prepare('SELECT kind, payload, updated_at FROM sync_data WHERE user_id = ?').all(userId);
+    const out = {};
+    for (const r of rows) {
+      out[r.kind] = { payload: r.payload, updatedAt: r.updated_at };
+    }
+    return out;
   }
+
+  function applyBlocks(userId, blocks) {
+    const now = Date.now();
+    const stmt = auth_db.prepare('INSERT INTO sync_data (user_id, kind, payload, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, kind) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at WHERE excluded.updated_at > sync_data.updated_at');
+    const insertMany = auth_db.transaction((items) => {
+      for (const b of items) {
+        const updatedAt = Number(b.updatedAt) || now;
+        stmt.run(userId, b.kind, b.payload, updatedAt);
+      }
+    });
+    insertMany(blocks);
+    return getBlocks(userId);
+  }
+
+  function dbGetCache(key) {
+    try {
+      const row = auth_db.prepare('SELECT value, updated_at FROM api_cache WHERE key = ?').get(key);
+      if (!row) return null;
+      return { value: JSON.parse(row.value), updatedAt: row.updated_at };
+    } catch (e) {
+      console.error('[DB Cache] getCache error:', e);
+      return null;
+    }
+  }
+
+  function dbSetCache(key, value) {
+    try {
+      const now = Date.now();
+      auth_db.prepare('INSERT OR REPLACE INTO api_cache (key, value, updated_at) VALUES (?, ?, ?)')
+        .run(key, JSON.stringify(value), now);
+    } catch (e) {
+      console.error('[DB Cache] setCache error:', e);
+    }
+  }
+
+  function dbClearCache() {
+    try {
+      auth_db.prepare('DELETE FROM api_cache').run();
+    } catch (e) {
+      console.error('[DB Cache] clearCache error:', e);
+    }
+  }
+
+  const auth = {
+    db: auth_db,
+    normalizeLogin,
+    createSession,
+    getSession,
+    destroySession,
+    registerUser,
+    verifyUser,
+    deleteUser,
+    getBlocks,
+    applyBlocks,
+    getCache: dbGetCache,
+    setCache: dbSetCache,
+    clearCache: dbClearCache
+  };
 
   const app = express();
   app.use(express.json());
