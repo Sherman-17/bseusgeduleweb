@@ -564,7 +564,7 @@ function parseScheduleHtml(html) {
           const groupText = $(cells[1]).html().replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
           const subgroup = $(cells[2]).text().trim();
           const contentCell = $(cells[3]);
-          const room = $(cells[4]).text().trim();
+          const room = cleanRoomText($(cells[4]).text());
           const distypeSpan = contentCell.find('.distype');
           const type = distypeSpan.length ? distypeSpan.text().replace(/[()]/g, '').trim() : '';
           const emEl = contentCell.find('em');
@@ -590,7 +590,23 @@ function parseScheduleHtml(html) {
         }
       } else {
         const time = $(cells[0]).text().trim();
-        const weeks = $(cells[1]).text().trim();
+        // Колонки недель в таблице может не быть (напр. у заочников каждая
+        // строка — конкретная дата): читаем cells[1] как недели ТОЛЬКО если
+        // это не ячейка контента и текст похож на номера недель. Иначе туда
+        // попадал бы текст пары («Криминалистика (Лекции) , ...»).
+        let weeks = '';
+        if (cells.length >= 3) {
+          const c1 = $(cells[1]);
+          const isContentCell = c1.find('.distype, .teacher, em, strong, b').length > 0 || c1.attr('colspan');
+          const text = c1.text().trim();
+          if (!isContentCell && /^\s*\(?[\d\s,–—\-.]+\)?\s*$/.test(text)) {
+            weeks = text;
+          }
+        }
+        if (!weeks) {
+          const commentMatch = row.html().match(/week\[i\]:\s*([\d\s,–—\-]+)/i);
+          if (commentMatch) weeks = '(' + commentMatch[1].trim() + ')';
+        }
         let subject = '', type = '', teacher = '', room = '';
         const contentCell = row.find("td[colspan='2'], td[colspan='3']");
         const rightCell = row.find('td.right, td.rght');
@@ -623,7 +639,7 @@ function parseScheduleHtml(html) {
             if (subTeacherSpan.length) subTeacher = subTeacherSpan.first().text().trim();
             if (!subTeacher) subTeacher = extractTeacherFromCell(subRow, $);
             const lastCell = subCells.last();
-            const subRoom = lastCell.length ? lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim() : '';
+            const subRoom = lastCell.length ? cleanRoomText(lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim()) : '';
             // Недели подгруппы могут отличаться от общих — берём из комментария BSEU
             let subWeeks = weeks;
             const cellHtml = lastCell.length ? lastCell.html() : '';
@@ -639,7 +655,7 @@ function parseScheduleHtml(html) {
         if (subgroupLessons.length) {
           subgroupLessons.forEach(l => lessons.push(l));
         } else if (subject && time) {
-          room = rightCell.length ? rightCell.text().trim() : '';
+          room = rightCell.length ? cleanRoomText(rightCell.text().trim()) : '';
           lessons.push({ day: currentDay || "Вне сетке", time, weeks, subject, type, teacher, room, isTeacher: false });
         }
       }
@@ -792,6 +808,25 @@ function audienceTokens(room) {
     if (m) tokens.push(m[0]);
   });
   return tokens;
+}
+
+// Вытягивает из строки «корпус/аудитория» (отбрасывает прилипшее время пары
+// вида "14:35-15:55 8/24"). Возвращает [] если шаблона нет — тогда вызывающий
+// оставляет исходную строку как есть, чтобы не потерять нестандартные номера.
+function extractRoomNumbers(room) {
+  const value = String(room || '')
+    .replace(/\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/g, ' ')
+    .trim();
+  const matches = value.match(/\d+\s*\/\s*\d+[А-ЯЁа-яёA-Za-z]*/g) || [];
+  return [...new Set(matches.map(m => m.replace(/\s*\/\s*/g, '/')))];
+}
+
+// То же, но одной строкой с правилом «не нашлось — оставить как было».
+function cleanRoomText(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return s;
+  const cleaned = extractRoomNumbers(s).join(', ');
+  return cleaned || s;
 }
 
 // Возвращает только те аудитории пары, которые реально совпали с запросом.
