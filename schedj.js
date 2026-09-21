@@ -604,159 +604,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   const crypto = require('crypto');
   const PORT = process.env.PORT || 3000;
 
-  const DB_PATH = path.join(__dirname, 'app.db');
-  const auth_db = new Database(DB_PATH);
-  auth_db.pragma('journal_mode = WAL');
-
-  auth_db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      login TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sync_data (
-      user_id INTEGER NOT NULL,
-      kind TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (user_id, kind),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS api_cache (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-  `);
-
-  const SESSIONS = new Map();
-  const SESSION_TTL = 1000 * 60 * 60 * 24 * 30;
-
-  function normalizeLogin(login) {
-    return String(login || '').trim().toLowerCase();
-  }
-
-  function createSession(userId, login) {
-    const token = crypto.randomBytes(32).toString('hex');
-    SESSIONS.set(token, { userId, login, exp: Date.now() + SESSION_TTL });
-    return token;
-  }
-
-  function getSession(token) {
-    if (!token) return null;
-    const s = SESSIONS.get(token);
-    if (!s) return null;
-    if (s.exp < Date.now()) {
-      SESSIONS.delete(token);
-      return null;
-    }
-    return s;
-  }
-
-  function destroySession(token) {
-    if (token) SESSIONS.delete(token);
-  }
-
-  function findUserByLogin(login) {
-    const row = auth_db.prepare('SELECT * FROM users WHERE login = ?').get(normalizeLogin(login));
-    return row || null;
-  }
-
-  function registerUser(login, password) {
-    const norm = normalizeLogin(login);
-    if (norm.length < 3) throw new Error('Логин слишком короткий (минимум 3 символа)');
-    if (String(password || '').length < 4) throw new Error('Пароль слишком короткий (минимум 4 символа)');
-    if (findUserByLogin(norm)) throw new Error('Такой логин уже занят');
-    const hash = bcrypt.hashSync(password, 10);
-    const now = Date.now();
-    const info = auth_db.prepare('INSERT INTO users (login, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)')
-      .run(norm, hash, now, now);
-    return { id: info.lastInsertRowid, login: norm };
-  }
-
-  function verifyUser(login, password) {
-    const user = findUserByLogin(login);
-    if (!user) return null;
-    if (!bcrypt.compareSync(String(password || ''), user.password_hash)) return null;
-    return { id: user.id, login: user.login };
-  }
-
-  function deleteUser(userId) {
-    auth_db.prepare('DELETE FROM users WHERE id = ?').run(userId);
-    auth_db.prepare('DELETE FROM sync_data WHERE user_id = ?').run(userId);
-    for (const [token, s] of SESSIONS) {
-      if (s.userId === userId) SESSIONS.delete(token);
-    }
-  }
-
-  function getBlocks(userId) {
-    const rows = auth_db.prepare('SELECT kind, payload, updated_at FROM sync_data WHERE user_id = ?').all(userId);
-    const out = {};
-    for (const r of rows) {
-      out[r.kind] = { payload: r.payload, updatedAt: r.updated_at };
-    }
-    return out;
-  }
-
-  function applyBlocks(userId, blocks) {
-    const now = Date.now();
-    const stmt = auth_db.prepare('INSERT INTO sync_data (user_id, kind, payload, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, kind) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at WHERE excluded.updated_at > sync_data.updated_at');
-    const insertMany = auth_db.transaction((items) => {
-      for (const b of items) {
-        const updatedAt = Number(b.updatedAt) || now;
-        stmt.run(userId, b.kind, b.payload, updatedAt);
-      }
-    });
-    insertMany(blocks);
-    return getBlocks(userId);
-  }
-
-  function dbGetCache(key) {
-    try {
-      const row = auth_db.prepare('SELECT value, updated_at FROM api_cache WHERE key = ?').get(key);
-      if (!row) return null;
-      return { value: JSON.parse(row.value), updatedAt: row.updated_at };
-    } catch (e) {
-      console.error('[DB Cache] getCache error:', e);
-      return null;
-    }
-  }
-
-  function dbSetCache(key, value) {
-    try {
-      const now = Date.now();
-      auth_db.prepare('INSERT OR REPLACE INTO api_cache (key, value, updated_at) VALUES (?, ?, ?)')
-        .run(key, JSON.stringify(value), now);
-    } catch (e) {
-      console.error('[DB Cache] setCache error:', e);
-    }
-  }
-
-  function dbClearCache() {
-    try {
-      auth_db.prepare('DELETE FROM api_cache').run();
-    } catch (e) {
-      console.error('[DB Cache] clearCache error:', e);
-    }
-  }
-
-  const auth = {
-    db: auth_db,
-    normalizeLogin,
-    createSession,
-    getSession,
-    destroySession,
-    registerUser,
-    verifyUser,
-    deleteUser,
-    getBlocks,
-    applyBlocks,
-    getCache: dbGetCache,
-    setCache: dbSetCache,
-    clearCache: dbClearCache
-  };
+  const auth = require('./server/auth');
 
   const app = express();
   app.use(express.json());
@@ -803,10 +651,54 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   }
   ensureCacheDir();
 
-  function cacheFilePath(key) {
-    const safe = Buffer.from(key).toString('base64').replace(/[/+=]/g, '_');
-    return path.join(CACHE_DIR, `${safe}.json`);
+  // ===== Читаемая «подпись» кэш-файла =====
+  // Имя файла = понятная метка (что хранится) + короткий хэш — уникальность
+  // и читаемость одновременно.
+  function sanitizeChunk(s, maxLen) {
+    const clean = String(s)
+      .replace(/[\/\\:*?"<>|\x00-\x1f]/g, '_')
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, maxLen);
+    return clean || 'x';
   }
+  function readableCacheName(key) {
+    try {
+      if (key.startsWith('list:')) {
+        const rest = key.slice('list:'.length);
+        const sep = rest.indexOf(':');
+        const action = sep >= 0 ? rest.slice(0, sep) : rest;
+        const paramsRaw = sep >= 0 ? rest.slice(sep + 1) : '';
+        const actionName = (String(action).split('.').pop() || 'list').replace(/\W+/g, '_');
+        let paramsPart = '';
+        try {
+          const p = JSON.parse(paramsRaw);
+          paramsPart = Object.keys(p).map(k => `${k}-${p[k]}`).join('_');
+        } catch (e) { paramsPart = ''; }
+        return `list_${sanitizeChunk(actionName, 40)}${paramsPart ? '_' + sanitizeChunk(paramsPart, 60) : ''}`;
+      }
+      if (key.startsWith('group:')) {
+        const p = key.slice('group:'.length).split(':').map(c => sanitizeChunk(c, 40));
+        return 'group_' + p.join('_');
+      }
+      if (key.startsWith('teacher:')) {
+        const p = key.slice('teacher:'.length).split(':');
+        const tname = (p.length >= 4 ? p[3] : '').replace(/\W+/g, '_');
+        return `teacher_${sanitizeChunk(tname, 50)}${p[0] ? '_' + sanitizeChunk(p[0], 30) : ''}`;
+      }
+    } catch (e) { /* ниже запасной вариант */ }
+    return sanitizeChunk(String(key), 80);
+  }
+  function cacheShortHash(key) {
+    return crypto.createHash('sha1').update(String(key)).digest('hex').slice(0, 10);
+  }
+  function cacheFilePath(key) {
+    const label = readableCacheName(key);
+    const hash = cacheShortHash(key);
+    return path.join(CACHE_DIR, `${label}_${hash}.json`);
+  }
+
 
   function fileGetCache(key) {
     try {
@@ -831,6 +723,133 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     }
   }
 
+  // ===== Быстрый поиск преподавателей из локального индекса =====
+  // Каждый символ в поле ФИО раньше уходил запросом в БГЭУ (медленно),
+  // хотя ответы на фамилии уже лежат в файловом кэше. Индекс собирается
+  // из всех ответов getTeachers, персистентен в teacher_index.json.
+  const TEACHER_INDEX_FILE = path.join(CACHE_DIR, 'teacher_index.json');
+  const TEACHER_INDEX_SAVE_DELAY = 10000;
+  let teacherSearchIndex = new Map();
+  let teacherIndexSaveTimer = null;
+  const teacherRefreshInflight = new Set();
+
+  function normTeacherQuery(s) {
+    return String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+  }
+
+  try {
+    if (fs.existsSync(TEACHER_INDEX_FILE)) {
+      const idx = JSON.parse(fs.readFileSync(TEACHER_INDEX_FILE, 'utf-8'));
+      if (Array.isArray(idx)) {
+        for (const t of idx) {
+          if (t && t.tname) teacherSearchIndex.set(normTeacherQuery(t.tname), t);
+        }
+      }
+    }
+  } catch (e) { /* индекс пересоберётся из свежих ответов */ }
+
+  function scheduleTeacherIndexSave() {
+    if (teacherIndexSaveTimer) return;
+    teacherIndexSaveTimer = setTimeout(() => {
+      teacherIndexSaveTimer = null;
+      try {
+        const arr = [...teacherSearchIndex.values()].slice(0, 5000);
+        fs.writeFileSync(TEACHER_INDEX_FILE, JSON.stringify(arr), 'utf-8');
+      } catch (e) { /* ignore */ }
+    }, TEACHER_INDEX_SAVE_DELAY);
+  }
+
+  function mergeTeachersToIndex(list) {
+    try {
+      if (!Array.isArray(list) || !list.length) return;
+      let added = 0;
+      for (const t of list) {
+        if (!t || !t.tname) continue;
+        const k = normTeacherQuery(t.tname);
+        if (!k || teacherSearchIndex.has(k)) continue;
+        teacherSearchIndex.set(k, { tid: t.tid, taid: t.taid, sid: t.sid, tname: t.tname });
+        added++;
+        if (teacherSearchIndex.size > 6000) break;
+      }
+      if (added) scheduleTeacherIndexSave();
+    } catch (e) { /* ignore */ }
+  }
+
+  function teacherFastMatch(tname, q) {
+    const a = normTeacherQuery(tname);
+    const b = normTeacherQuery(q);
+    if (!a || !b) return false;
+    if (a.startsWith(b)) return true;
+    const ap = a.split(' ').filter(Boolean);
+    const bp = b.split(' ').filter(Boolean);
+    if (!ap.length || !bp.length) return false;
+    if (!ap[0].startsWith(bp[0])) return false;
+    if (bp.length === 1) return true;
+    for (let i = 1; i < bp.length; i++) {
+      const bi = bp[i].replace(/\./g, '');
+      if (!bi) continue;
+      const ai = (ap[i] || '').replace(/\./g, '');
+      if (!ai) return false;
+      if (bi.length === 1) {
+        if (ai[0] !== bi[0]) return false;
+      } else if (!ai.startsWith(bi)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Одноразовый прогрев индекса из файлового кэша (ответы getTeachers
+  // по фамилиям от ночного обхода) — быстрый путь работает сразу.
+  let teacherIndexWarmed = false;
+  function warmTeacherIndexFromCache() {
+    if (teacherIndexWarmed) return;
+    teacherIndexWarmed = true;
+    try {
+      const files = fs.readdirSync(CACHE_DIR).filter(f => f.includes('getTeachers') && f.endsWith('.json'));
+      let added = 0;
+      for (const f of files) {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, f), 'utf-8'));
+          const val = parsed && parsed.value;
+          if (!Array.isArray(val)) continue;
+          for (const t of val) {
+            if (!t || !t.tname) continue;
+            const k = normTeacherQuery(t.tname);
+            if (k && !teacherSearchIndex.has(k)) {
+              teacherSearchIndex.set(k, { tid: t.tid, taid: t.taid, sid: t.sid, tname: t.tname });
+              added++;
+              if (teacherSearchIndex.size > 6000) break;
+            }
+          }
+        } catch (e) { /* битый файл — пропускаем */ }
+        if (teacherSearchIndex.size > 6000) break;
+      }
+      if (added) scheduleTeacherIndexSave();
+    } catch (e) { /* ignore */ }
+  }
+
+  function searchTeachersFast(q, limit = 20) {
+    warmTeacherIndexFromCache();
+    if (!teacherSearchIndex || !teacherSearchIndex.size) return [];
+    const nq = normTeacherQuery(q);
+    if (!nq) return [];
+    const out = [];
+    for (const t of teacherSearchIndex.values()) {
+      if (teacherFastMatch(t.tname, nq)) out.push(t);
+      if (out.length >= 200) break;
+    }
+    out.sort((x, y) => {
+      const nx = normTeacherQuery(x.tname);
+      const ny = normTeacherQuery(y.tname);
+      const rank = (n) => (n === nq ? 0 : n.startsWith(nq) ? 1 : 2);
+      const rx = rank(nx), ry = rank(ny);
+      if (rx !== ry) return rx - ry;
+      return nx.localeCompare(ny, 'ru');
+    });
+    return out.slice(0, limit);
+  }
+
   function getToken(req) {
     return req.cookies ? req.cookies[COOKIE_NAME] : null;
   }
@@ -847,52 +866,67 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     });
   }
 
-  // Rate limiter
-  const AUTH_RATE_LIMIT = 5;
-  const AUTH_RATE_WINDOW = 60 * 1000;
-  const authAttempts = new Map();
-  function authRateLimited(ip) {
-    const now = Date.now();
-    const rec = authAttempts.get(ip);
-    if (!rec || rec.resetAt < now) {
-      authAttempts.set(ip, { count: 1, resetAt: now + AUTH_RATE_WINDOW });
-      return false;
-    }
-    rec.count += 1;
-    return rec.count > AUTH_RATE_LIMIT;
-  }
-  function guardAuth(req, res, next) {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    if (authRateLimited(ip)) {
-      return res.status(429).json({ error: 'Слишком много попыток. Попробуйте позже.' });
-    }
-    next();
-  }
+  const guardAuth = auth.guardAuth;
 
-  // --- Auth endpoints ---
-  app.post('/api/auth/register', guardAuth, (req, res) => {
+  app.get('/api/auth/check-login', async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'auth_disabled' });
     try {
-      const { login, password } = req.body || {};
-      const user = auth.registerUser(login, password);
-      const token = auth.createSession(user.id, user.login);
-      setSessionCookie(res, token);
-      res.json({ ok: true, user: { login: user.login } });
+      const login = String(req.query.login || '').trim();
+      if (!login) {
+        return res.json({ ok: true, taken: false });
+      }
+      const taken = auth.isLoginTaken(login);
+      res.json({ ok: true, taken });
     } catch (e) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.post('/api/auth/login', guardAuth, (req, res) => {
+  // --- Auth endpoints ---
+  app.post('/api/auth/register', guardAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
     try {
       const { login, password } = req.body || {};
-      const user = auth.verifyUser(login, password);
-      if (!user) return res.status(401).json({ error: 'Неверный логин или пароль' });
+      const user = await auth.registerUser(login, password);
+      auth.resetFailedAttempts(ip);
       const token = auth.createSession(user.id, user.login);
       setSessionCookie(res, token);
       res.json({ ok: true, user: { login: user.login } });
     } catch (e) {
+      const state = auth.recordFailedAttempt(ip);
+      if (state.locked) {
+        res.setHeader('Retry-After', state.retryAfter);
+        return res.status(429).json({ error: `Слишком много попыток. Пауза ${state.retryAfter} сек.` });
+      }
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/auth/login', guardAuth, async (req, res) => {
+    if (!auth) return res.status(500).json({ error: 'auth_disabled' });
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    try {
+      const { login, password } = req.body || {};
+      const user = await auth.verifyUser(login, password);
+      if (!user) {
+        const state = auth.recordFailedAttempt(ip);
+        if (state.locked) {
+          res.setHeader('Retry-After', state.retryAfter);
+          return res.status(429).json({ error: `Слишком много попыток. Пауза ${state.retryAfter} сек.` });
+        }
+        return res.status(401).json({ error: 'Неверный логин или пароль' });
+      }
+      auth.resetFailedAttempts(ip);
+      const token = auth.createSession(user.id, user.login);
+      setSessionCookie(res, token);
+      res.json({ ok: true, user: { login: user.login } });
+    } catch (e) {
+      const state = auth.recordFailedAttempt(ip);
+      if (state.locked) {
+        res.setHeader('Retry-After', state.retryAfter);
+        return res.status(429).json({ error: `Слишком много попыток. Пауза ${state.retryAfter} сек.` });
+      }
       res.status(400).json({ error: e.message });
     }
   });
@@ -996,37 +1030,34 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     }
   }
 
-  // Повтор запроса при транзитных сбоях BSEU (502/503/429, таймаут, сетевая
-  // ошибка). Без этого сборка полного расписания теряет целые факультеты/группы
-  // из-за случайных 502 Bad Gateway, и кэш аудиторий собирается неполным.
-  async function fetchWithRetry(url, options = {}, { retries = 4, baseDelay = 500, timeout = FETCH_TIMEOUT } = {}) {
+  async function fetchWithRetry(url, options = {}, { retries = 1, baseDelay = 200, timeout = FETCH_TIMEOUT } = {}) {
     let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const response = await fetchWithTimeout(url, options, timeout);
-        // 4xx (кроме 429) не являются транзитными — не повторяем, отдаём как есть.
         if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
           return response;
         }
         lastErr = new Error(`HTTP status ${response.status}`);
       } catch (error) {
-        lastErr = error; // таймаут (AbortError) или сетевая ошибка — транзитные
+        lastErr = error;
       }
       if (attempt < retries) {
-        const delay = baseDelay * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
+        const delay = baseDelay * Math.pow(2, attempt) + Math.floor(Math.random() * 100);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
     throw lastErr;
   }
 
-  async function fetchBseuList(action, params = {}) {
+  async function fetchBseuList(action, params = {}, fetchOpts = {}) {
     const cacheKey = `list:${action}:${JSON.stringify(params)}`;
     const cached = fileGetCache(cacheKey);
     const now = Date.now();
     const listTTL = 24 * 60 * 60 * 1000; // 24 hours
-    
+
     if (cached && (now - cached.updatedAt < listTTL)) {
+      if (action.includes('getTeachers')) mergeTeachersToIndex(cached.value);
       return cached.value;
     }
 
@@ -1045,7 +1076,10 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded; charset=windows-1251",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+          "Referer": "https://bseu.by/"
         },
         body: iconv.encode(bodyString, 'win1251')
       });
@@ -1055,10 +1089,14 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       const decoded = decodeResponseBuffer(Buffer.from(buffer), response);
        const data = JSON.parse(decoded);
        fileSetCache(cacheKey, data);
+       if (action.includes('getTeachers')) mergeTeachersToIndex(data);
        return data;
      } catch (error) {
        console.error(`[BSEU List] Failed for ${action}:`, error);
-       if (cached) return cached.value;
+       if (cached) {
+         if (action.includes('getTeachers')) mergeTeachersToIndex(cached.value);
+         return cached.value;
+       }
        throw error;
      }
   }
@@ -1124,6 +1162,23 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
       const feb8 = new Date(Date.UTC(year, 1, 8));
       return normalizeSemesterStartDate(normalizeSemesterStart(feb8.toISOString().slice(0, 10)));
     }
+  }
+
+  // Вытягивает из строки «корпус/аудитория» (отбрасывает прилипшее время пары
+  // вида "14:35-15:55 8/24"). cleanRoomText оставляет исходную строку как есть,
+  // если шаблон не нашёлся, чтобы не потерять нестандартные номера.
+  function extractRoomNumbers(room) {
+    const value = String(room || '')
+      .replace(/\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/g, ' ')
+      .trim();
+    const matches = value.match(/\d+\s*\/\s*\d+[А-ЯЁа-яёA-Za-z]*/g) || [];
+    return [...new Set(matches.map(m => m.replace(/\s*\/\s*/g, '/')))];
+  }
+  function cleanRoomText(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return s;
+    const cleaned = extractRoomNumbers(s).join(', ');
+    return cleaned || s;
   }
 
   function parseScheduleHtml(html) {
@@ -1222,7 +1277,22 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
           }
         } else {
           const time = $(cells[0]).text().trim();
-          const weeks = $(cells[1]).text().trim();
+          // Колонки недель в таблице может не быть (напр. у заочников каждая
+          // строка — конкретная дата): читаем cells[1] как недели ТОЛЬКО если
+          // это не ячейка контента и текст похож на номера недель.
+          let weeks = '';
+          if (cells.length >= 3) {
+            const c1 = $(cells[1]);
+            const isContentCell = c1.find('.distype, .teacher, em, strong, b').length > 0 || c1.attr('colspan');
+            const text = c1.text().trim();
+            if (!isContentCell && /^\s*\(?[\d\s,–—\-.]+\)?\s*$/.test(text)) {
+              weeks = text;
+            }
+          }
+          if (!weeks) {
+            const commentMatch = row.html().match(/week\[i\]:\s*([\d\s,–—\-]+)/i);
+            if (commentMatch) weeks = '(' + commentMatch[1].trim() + ')';
+          }
           let subject = '';
           let type = '';
           let teacher = '';
@@ -1245,48 +1315,69 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
             subject = clone.text().replace(/,\s*$/, '').trim();
           }
           
-          if (rightCell.length) {
-            room = rightCell.text().trim();
-          } else if (subject) {
-            const subgroupRooms = [];
+          const subgroupLessons = [];
+          if (subject) {
             for (let j = i + 1; j < rowArr.length; j++) {
               const subRow = $(rowArr[j]);
               if (subRow.find('td.wday').length) break;
               const subCells = subRow.find('td');
-              if (subCells.length >= 3 && !subRow.find('td.sg').length) break;
-              const lastCell = subCells.last();
-              if (lastCell.length) {
-                const r = lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim();
-                if (r && !subgroupRooms.includes(r)) subgroupRooms.push(r);
+              if (subCells.length >= 2 && !subRow.find('td.sg').length) break;
+              const sgCell = subRow.find('td.sg');
+              if (!sgCell.length) continue;
+              const subgroup = sgCell.text().trim();
+              // У строки подгруппы может быть собственное время
+              let subTime = time;
+              const subTimeText = subCells.length ? $(subCells[0]).text().trim() : '';
+              if (/^\s*\d{1,2}[:.]\d{2}\s*[-–]\s*\d{1,2}[:.]\d{2}\s*$/.test(subTimeText)) {
+                subTime = subTimeText;
               }
+              let subTeacher = '';
+              const subTeacherSpan = subRow.find('.teacher, .teacher.dd, span[class*="teacher"]');
+              if (subTeacherSpan.length) subTeacher = subTeacherSpan.first().text().trim();
+              if (!subTeacher) subTeacher = extractTeacherFromCell(subRow, $);
+              const lastCell = subCells.last();
+              const subRoom = lastCell.length
+                ? extractRoomNumbers(lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim()).join(', ')
+                : '';
+              // Недели подгруппы: свои берём, только если там есть цифры.
+              let subWeeks = weeks;
+              const cellHtml = lastCell.length ? lastCell.html() : '';
+              const wm = cellHtml && cellHtml.match(/week\[i\]:\s*([\d\s,–—\-]+)/i);
+              if (wm && /\d/.test(wm[1])) subWeeks = '(' + wm[1].trim() + ')';
+              if (subCells.length >= 3) {
+                const sc1Text = $(subCells[1]).text().trim();
+                if (/\d/.test(sc1Text) && /^\s*\(?[\d\s,–—\-.]+\)?\s*$/.test(sc1Text)) {
+                  subWeeks = sc1Text;
+                }
+              }
+              subgroupLessons.push({
+                day: currentDay || "Вне сетки", time: subTime, weeks: subWeeks, subject, type,
+                teacher: (subTeacher || teacher).trim(), room: subRoom, isTeacher: false, subgroup
+              });
             }
-            room = subgroupRooms.join(', ');
           }
-          
-          if (subject && time) {
-            lessons.push({
-              day: currentDay || "Вне сетки",
-              time,
-              weeks,
-              subject,
-              type,
-              teacher,
-              room,
-              isTeacher: false
-            });
+
+          if (subgroupLessons.length) {
+            subgroupLessons.forEach(l => lessons.push(l));
+          } else if (subject && time) {
+            room = rightCell.length ? extractRoomNumbers(rightCell.text()).join(', ') : '';
+            lessons.push({ day: currentDay || "Вне сетки", time, weeks, subject, type, teacher, room, isTeacher: false });
           }
         }
       }
     }
     
-    const subjectGroups = {};
+    const subjectTypeSubgroupGroups = {};
     lessons.forEach(l => {
       const subj = (l.subject || '').trim();
-      if (!subjectGroups[subj]) subjectGroups[subj] = [];
-      subjectGroups[subj].push(l);
+      const type = (l.type || '').trim() || 'без типа';
+      const subgroup = (l.subgroup || '').trim() || 'общая';
+      const bucketKey = `${subj}::${type}::${subgroup}`;
+      if (!subjectTypeSubgroupGroups[bucketKey]) subjectTypeSubgroupGroups[bucketKey] = [];
+      subjectTypeSubgroupGroups[bucketKey].push(l);
     });
     
-    Object.values(subjectGroups).forEach(group => {
+    Object.values(subjectTypeSubgroupGroups).forEach(group => {
       const dayOrder = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
       group.sort((a, b) => {
         const aDay = (a.day || '').toLowerCase().trim();
@@ -1310,28 +1401,214 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     };
   }
 
+  const SESSION_TTL = 5 * 60 * 1000; // 5 минут кеширования сессии и динамического __act
+  let bseuSessionCache = { cookies: '', act: '', expiresAt: 0 };
+  async function getBseuSession() {
+    const now = Date.now();
+    if (bseuSessionCache.act && bseuSessionCache.cookies && now < bseuSessionCache.expiresAt) {
+      return bseuSessionCache;
+    }
+    try {
+      const getRes = await fetchWithRetry("https://bseu.by/schedule/", {
+        method: "GET",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+        }
+      });
+      if (getRes.ok) {
+        const getBuffer = await getRes.arrayBuffer();
+        const getHtml = decodeResponseBuffer(Buffer.from(getBuffer), getRes);
+        let cookies = "";
+        const setCookieHeader = getRes.headers.get('set-cookie') || getRes.headers.getSetCookie?.();
+        if (setCookieHeader) {
+          if (Array.isArray(setCookieHeader)) {
+            cookies = setCookieHeader.map(c => c.split(';')[0]).join('; ');
+          } else if (typeof setCookieHeader === 'string') {
+            cookies = setCookieHeader.split(',').map(c => c.trim().split(';')[0]).join('; ');
+          }
+        }
+        const actMatch = getHtml.match(/__id\.\d+\.main\.inpFldsA\.GetSchedule[^\s"'<>]+/);
+        if (actMatch) {
+          bseuSessionCache.act = actMatch[0];
+          bseuSessionCache.cookies = cookies;
+          bseuSessionCache.expiresAt = now + SESSION_TTL;
+        }
+      }
+    } catch (e) {
+      // fallback
+    }
+    if (!bseuSessionCache.act) {
+      bseuSessionCache.act = "__id.25.main.inpFldsA.GetSchedule__sp.7.results__fp.4.main";
+    }
+    return bseuSessionCache;
+  }
+
+  let bseuTeacherSessionCache = { cookies: '', baseAct: '', expiresAt: 0 };
+  async function getBseuTeacherSession() {
+    const now = Date.now();
+    if (bseuTeacherSessionCache.baseAct && bseuTeacherSessionCache.cookies && now < bseuTeacherSessionCache.expiresAt) {
+      return bseuTeacherSessionCache;
+    }
+    try {
+      const getRes = await fetchWithRetry("https://bseu.by/schedule/", {
+        method: "GET",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+        }
+      });
+      if (getRes.ok) {
+        const getBuffer = await getRes.arrayBuffer();
+        const getHtml = decodeResponseBuffer(Buffer.from(getBuffer), getRes);
+        let cookies = "";
+        const setCookieHeader = getRes.headers.get('set-cookie') || getRes.headers.getSetCookie?.();
+        if (setCookieHeader) {
+          if (Array.isArray(setCookieHeader)) {
+            cookies = setCookieHeader.map(c => c.split(';')[0]).join('; ');
+          } else if (typeof setCookieHeader === 'string') {
+            cookies = setCookieHeader.split(',').map(c => c.trim().split(';')[0]).join('; ');
+          }
+        }
+        const actMatch = getHtml.match(/__id\.\d+\.main\.TSchedA\.GetTSched[^\s"'<>]+/);
+        if (actMatch) {
+          bseuTeacherSessionCache.baseAct = actMatch[0];
+          bseuTeacherSessionCache.cookies = cookies;
+          bseuTeacherSessionCache.expiresAt = now + SESSION_TTL;
+        }
+      }
+    } catch (e) {
+      // fallback
+    }
+    if (!bseuTeacherSessionCache.baseAct) {
+      bseuTeacherSessionCache.baseAct = "__id.22.main.TSchedA.GetTSched_sp.8.tresults__fp.4.main";
+    }
+    return bseuTeacherSessionCache;
+  }
+
+  async function fetchGroupSchedule(faculty, form, course, group) {
+    const session = await getBseuSession();
+    const cookies = session.cookies;
+    const act = session.act;
+
+    const payload = new URLSearchParams({
+      __act: act,
+      group: String(group),
+      faculty: String(faculty),
+      form: String(form),
+      course: String(course),
+      period: '3',
+      tname: ''
+    });
+
+    const postRes = await fetchWithRetry("https://bseu.by/schedule/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": "https://bseu.by",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://bseu.by/schedule/",
+        ...(cookies ? { "Cookie": cookies } : {})
+      },
+      body: payload.toString()
+    });
+
+    if (!postRes.ok) throw new Error(`POST status ${postRes.status}`);
+
+    const postBuffer = await postRes.arrayBuffer();
+    const htmlText = decodeResponseBuffer(Buffer.from(postBuffer), postRes);
+
+    return htmlText;
+  }
+
+  async function fetchTeacherSchedule(tid, taid, sid, tname) {
+    const session = await getBseuTeacherSession();
+    const cookies = session.cookies;
+    const baseAct = session.baseAct;
+
+    const act = `tid.${String(tid).length}.${tid}taid.${String(taid).length}.${taid}sid.${String(sid).length}.${sid}${baseAct}`;
+
+    const payload = new URLSearchParams({
+      __act: act,
+      faculty: '-1',
+      form: '-1',
+      course: '-1',
+      group: '-1',
+      tname: tname,
+      period: '3'
+    });
+
+    const postRes = await fetchWithRetry("https://bseu.by/schedule/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": "https://bseu.by",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://bseu.by/schedule/",
+        ...(cookies ? { "Cookie": cookies } : {})
+      },
+      body: payload.toString()
+    });
+
+    if (!postRes.ok) throw new Error(`POST status ${postRes.status}`);
+
+    const postBuffer = await postRes.arrayBuffer();
+    const htmlText = decodeResponseBuffer(Buffer.from(postBuffer), postRes);
+
+    return htmlText;
+  }
+
   async function getScheduleWithCache(cacheKey, bodyString) {
     const cached = fileGetCache(cacheKey);
     const now = Date.now();
-    const cacheTTL = 2 * 60 * 60 * 1000; // 2 hours
-    
+    const cacheTTL = 2 * 60 * 1000; // 2 minutes
     if (cached && (now - cached.updatedAt < cacheTTL)) {
       return { ...cached.value, isFallback: false };
     }
     
     try {
-      const response = await fetchWithRetry("https://bseu.by/schedule/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded; charset=windows-1251",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        },
-        body: iconv.encode(bodyString, 'win1251')
-      });
-      
-      if (!response.ok) throw new Error(`HTTP status ${response.status}`);
-      const buffer = await response.arrayBuffer();
-      const htmlText = decodeResponseBuffer(Buffer.from(buffer), response);
+      const params = new URLSearchParams(bodyString);
+      const faculty = params.get('faculty');
+      const form = params.get('form');
+      const course = params.get('course');
+      const group = params.get('group');
+      const tid = params.get('tid');
+      const taid = params.get('taid');
+      const sid = params.get('sid');
+      const tname = params.get('tname');
+
+      let htmlText;
+      if (faculty && form && course && group) {
+        htmlText = await fetchGroupSchedule(faculty, form, course, group);
+      } else if (tid && taid && sid && tname) {
+        htmlText = await fetchTeacherSchedule(tid, taid, sid, tname);
+      } else {
+        const payload = new URLSearchParams(bodyString);
+        payload.set('tname', '');
+        payload.set('period', '3');
+        const response = await fetchWithRetry("https://bseu.by/schedule/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Origin": "https://bseu.by",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://bseu.by/schedule/"
+          },
+          body: payload.toString()
+        });
+        
+        if (!response.ok) throw new Error(`HTTP status ${response.status}`);
+        const buffer = await response.arrayBuffer();
+        htmlText = decodeResponseBuffer(Buffer.from(buffer), response);
+      }
       
        const parsedData = parseScheduleHtml(htmlText);
        fileSetCache(cacheKey, parsedData);
@@ -1345,7 +1622,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
           savedAt: cached.updatedAt
         };
       }
-      throw error;
+      return { semesterStartDate: null, currentSemesterWeek: 1, lessons: [], isSchedulePage: false, isFallback: true, error: error.message };
     }
   }
 
@@ -1378,11 +1655,27 @@ app.get('/api/forms', async (req, res) => {
   });
   app.get('/api/teachers', async (req, res) => {
     try {
-      const { q } = req.query;
-      const data = await fetchBseuList("__id.24.main.TSchedA.getTeachers", { tname: q });
+      const q = String(req.query.q || '').trim();
+      if (q.length < 2) return res.json([]);
+      // Быстрый путь: совпадения из локального индекса — мгновенно, без БГЭУ.
+      try {
+        const fast = searchTeachersFast(q);
+        if (fast.length) {
+          res.json(fast);
+          const nq = normTeacherQuery(q);
+          if (fast.length < 8 && q.length >= 3 && !teacherRefreshInflight.has(nq)) {
+            teacherRefreshInflight.add(nq);
+            fetchBseuList("__id.24.main.TSchedA.getTeachers", { tname: q }, { retries: 1, timeout: 8000 })
+              .catch(() => null)
+              .finally(() => teacherRefreshInflight.delete(nq));
+          }
+          return;
+        }
+      } catch (e) { /* ниже медленный путь */ }
+      const data = await fetchBseuList("__id.24.main.TSchedA.getTeachers", { tname: q }, { retries: 1, timeout: 8000 });
       res.json(data);
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.json([]);
     }
   });
 
@@ -1474,7 +1767,7 @@ app.get('/api/forms', async (req, res) => {
 
       // Режим преподавателя (источник bseu.by)
       if (tid && taid && sid && tname) {
-        const body = `__act=tid.${tid.length}.${tid}taid.${taid.length}.${taid}sid.${sid.length}.${sid}__id.22.main.TSchedA.GetTSched__sp.8.tresults__fp.4.main&tname=${toWin1251Url(tname)}&period=3`;
+        const body = `tid=${encodeURIComponent(tid)}&taid=${encodeURIComponent(taid)}&sid=${encodeURIComponent(sid)}&tname=${encodeURIComponent(toWin1251Url(tname))}`;
         const cacheKey = `teacher:${tid}:${taid}:${sid}:${tname}`;
         const schedule = await getScheduleWithCache(cacheKey, body);
         return res.json(schedule);
@@ -1627,6 +1920,7 @@ app.get('/api/forms', async (req, res) => {
     const range = getScheduleDateRange();
     res.json({
       status: 'ok',
+      buildTag: 'subgroups-v1',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       fullSchedule: {
