@@ -329,6 +329,233 @@ function fileSetCache(key, value) {
   } catch (e) { /* ignore */ }
 }
 
+// ===== Быстрый поиск преподавателей из локального индекса =====
+// Раньше каждый символ в поле ФИО уходил запросом в БГЭУ (медленно: ретраи и
+// таймауты по 15 с), хотя ответы на фамилии уже лежат в файловом кэше.
+// Индекс (tname -> {tid,taid,sid,tname}) собирается из всех ответов getTeachers,
+// персистентен в teacher_index.json, совпадения отдаются мгновенно без сети.
+const TEACHER_INDEX_FILE = path.join(CACHE_DIR, 'teacher_index.json');
+const TEACHER_INDEX_SAVE_DELAY = 10000;
+let teacherSearchIndex = new Map();
+let teacherIndexSaveTimer = null;
+const teacherRefreshInflight = new Set();
+
+function normTeacherQuery(s) {
+  return String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+}
+
+try {
+  if (fs.existsSync(TEACHER_INDEX_FILE)) {
+    const idx = JSON.parse(fs.readFileSync(TEACHER_INDEX_FILE, 'utf-8'));
+    if (Array.isArray(idx)) {
+      for (const t of idx) {
+        if (t && t.tname) teacherSearchIndex.set(normTeacherQuery(t.tname), t);
+      }
+    }
+  }
+} catch (e) { /* индекс пересоберётся из свежих ответов */ }
+
+function scheduleTeacherIndexSave() {
+  if (teacherIndexSaveTimer) return;
+  teacherIndexSaveTimer = setTimeout(() => {
+    teacherIndexSaveTimer = null;
+    try {
+      const arr = [...teacherSearchIndex.values()].slice(0, 5000);
+      // Страховка от затирания хорошего индекса маленьким: если на диске
+      // уже лежит больше записей, а в памяти сейчас меньше (рестарт с пустым
+      // .cache) — файл НЕ перезаписываем, а подтягиваем записи в память.
+      try {
+        if (fs.existsSync(TEACHER_INDEX_FILE)) {
+          const prev = JSON.parse(fs.readFileSync(TEACHER_INDEX_FILE, 'utf-8'));
+          if (Array.isArray(prev) && prev.length > arr.length + 50) {
+            console.warn(`[Teachers] Skip index save: on-disk has ${prev.length}, in-memory only ${arr.length} (would wipe).`);
+            for (const t of prev) {
+              if (t && t.tname) {
+                const k = normTeacherQuery(t.tname);
+                if (k && !teacherSearchIndex.has(k)) teacherSearchIndex.set(k, t);
+              }
+            }
+            return;
+          }
+        }
+      } catch (_) { /* файл битый — перезаписываем смело */ }
+      fs.writeFileSync(TEACHER_INDEX_FILE, JSON.stringify(arr), 'utf-8');
+    } catch (e) { /* ignore */ }
+  }, TEACHER_INDEX_SAVE_DELAY);
+}
+
+function isDummyTeacherIds(t) {
+  return String(t && t.tid) === '-1' && String(t && t.taid) === '-1' && String(t && t.sid) === '-1';
+}
+
+function mergeTeachersToIndex(list) {
+  try {
+    if (!Array.isArray(list) || !list.length) return;
+    let added = 0;
+    for (const t of list) {
+      if (!t || !t.tname) continue;
+      const k = normTeacherQuery(t.tname);
+      if (!k) continue;
+      const existing = teacherSearchIndex.get(k);
+      if (existing) {
+        // Заглушка из полного кэша (все ID -1) заменяется реальными ID
+        // при первом живом ответе БГЭУ.
+        if (isDummyTeacherIds(existing) && !isDummyTeacherIds(t)) {
+          teacherSearchIndex.set(k, { tid: t.tid, taid: t.taid, sid: t.sid, tname: t.tname });
+          added++;
+        }
+        continue;
+      }
+      teacherSearchIndex.set(k, { tid: t.tid, taid: t.taid, sid: t.sid, tname: t.tname });
+      added++;
+      if (teacherSearchIndex.size > 6000) break;
+    }
+    if (added) scheduleTeacherIndexSave();
+  } catch (e) { /* ignore */ }
+}
+
+// Совпадение запроса с ФИО: префикс фамилии + инициалы/начала имён
+// («пет», «петров а», «Петров Александр» — все Петровы).
+function teacherFastMatch(tname, q) {
+  const a = normTeacherQuery(tname);
+  const b = normTeacherQuery(q);
+  if (!a || !b) return false;
+  if (a.startsWith(b)) return true;
+  const ap = a.split(' ').filter(Boolean);
+  const bp = b.split(' ').filter(Boolean);
+  if (!ap.length || !bp.length) return false;
+  if (!ap[0].startsWith(bp[0])) return false;
+  if (bp.length === 1) return true;
+  for (let i = 1; i < bp.length; i++) {
+    const bi = bp[i].replace(/\./g, '');
+    if (!bi) continue;
+    const ai = (ap[i] || '').replace(/\./g, '');
+    if (!ai) return false;
+    if (bi.length === 1) {
+      if (ai[0] !== bi[0]) return false;
+    } else if (!ai.startsWith(bi)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Одноразовый прогрев индекса из файлового кэша. Здесь имена файлов —
+// base64 без подсказок, поэтому отбираем файлы по форме значения:
+// ответ getTeachers — массив объектов с полем tname.
+let teacherIndexWarmed = false;
+function warmTeacherIndexFromCache() {
+  if (teacherIndexWarmed) return;
+  teacherIndexWarmed = true;
+  try {
+    const files = fs.readdirSync(CACHE_DIR).filter(f => f.endsWith('.json')).slice(0, 10000);
+    let added = 0;
+    for (const f of files) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, f), 'utf-8'));
+        const val = parsed && parsed.value;
+        if (!Array.isArray(val) || !val.length || !val[0] || !val[0].tname) continue;
+        for (const t of val) {
+          if (!t || !t.tname) continue;
+          const k = normTeacherQuery(t.tname);
+          if (k && !teacherSearchIndex.has(k)) {
+            teacherSearchIndex.set(k, { tid: t.tid, taid: t.taid, sid: t.sid, tname: t.tname });
+            added++;
+            if (teacherSearchIndex.size > 6000) break;
+          }
+        }
+      } catch (e) { /* битый файл — пропускаем */ }
+      if (teacherSearchIndex.size > 6000) break;
+    }
+    if (added) scheduleTeacherIndexSave();
+  } catch (e) { /* ignore */ }
+}
+
+// Подстраховка индекса из полного расписания (fullScheduleCache): там есть
+// все ФИО преподавателей семестра, но без tid/taid/sid. Добавляем их как
+// заглушки (-1/-1/-1): поиск работает сразу, а расписание для таких
+// преподавателей отдаётся из полного кэша по ФИО. При первом живом ответе
+// БГЭУ заглушка заменяется реальными ID (см. mergeTeachersToIndex).
+function warmTeacherIndexFromFullCache() {
+  try {
+    const src = (typeof fullScheduleCache !== 'undefined' && fullScheduleCache) ? fullScheduleCache : null;
+    if (!src || !src.length) return 0;
+    let added = 0;
+    for (const p of src) {
+      const name = p && p.teacher ? String(p.teacher).trim() : '';
+      if (!name) continue;
+      const k = normTeacherQuery(name);
+      if (!k || teacherSearchIndex.has(k)) continue;
+      teacherSearchIndex.set(k, { tid: '-1', taid: '-1', sid: '-1', tname: name });
+      added++;
+      if (teacherSearchIndex.size > 6000) break;
+    }
+    if (added) {
+      scheduleTeacherIndexSave();
+      console.log(`[Teachers] Warmed search index from fullScheduleCache: +${added} names.`);
+    }
+    return added;
+  } catch (e) { /* ignore */ }
+  return 0;
+}
+
+function searchTeachersFullCache(q, limit = 20) {
+  try {
+    const src = (typeof fullScheduleCache !== 'undefined' && fullScheduleCache) ? fullScheduleCache : null;
+    if (!src || !src.length) return [];
+    const nq = normTeacherQuery(q);
+    if (!nq) return [];
+    const seen = new Set();
+    const out = [];
+    for (const p of src) {
+      const name = p && p.teacher ? String(p.teacher).trim() : '';
+      if (!name) continue;
+      const k = normTeacherQuery(name);
+      if (!k || seen.has(k)) continue;
+      if (!teacherFastMatch(name, nq)) continue;
+      seen.add(k);
+      const existing = teacherSearchIndex.get(k);
+      out.push(existing || { tid: '-1', taid: '-1', sid: '-1', tname: name });
+      if (out.length >= 200) break;
+    }
+    out.sort((x, y) => {
+      const nx = normTeacherQuery(x.tname);
+      const ny = normTeacherQuery(y.tname);
+      const rank = (n) => (n === nq ? 0 : n.startsWith(nq) ? 1 : 2);
+      const rx = rank(nx), ry = rank(ny);
+      if (rx !== ry) return rx - ry;
+      return nx.localeCompare(ny, 'ru');
+    });
+    return out.slice(0, limit);
+  } catch (e) { return []; }
+}
+
+function searchTeachersFast(q, limit = 20) {
+  warmTeacherIndexFromCache();
+  // Если файловый кэш пуст (эпизодический диск Render, смена версии кэша),
+  // добираем ФИО из полного расписания — иначе поиск мёртв при сбоях БГЭУ.
+  if (!teacherSearchIndex || teacherSearchIndex.size < 50) {
+    warmTeacherIndexFromFullCache();
+  }
+  if (!teacherSearchIndex || !teacherSearchIndex.size) return [];
+  const nq = normTeacherQuery(q);
+  if (!nq) return [];
+  const out = [];
+  for (const t of teacherSearchIndex.values()) {
+    if (teacherFastMatch(t.tname, nq)) out.push(t);
+    if (out.length >= 200) break;
+  }
+  out.sort((x, y) => {
+    const nx = normTeacherQuery(x.tname);
+    const ny = normTeacherQuery(y.tname);
+    const rank = (n) => (n === nq ? 0 : n.startsWith(nq) ? 1 : 2);
+    const rx = rank(nx), ry = rank(ny);
+    if (rx !== ry) return rx - ry;
+    return nx.localeCompare(ny, 'ru');
+  });
+  return out.slice(0, limit);
+}
+
 // ===== Improved fetch with timeout =====
 const FETCH_TIMEOUT = 15000; // 15 секунд таймаут для всех запросов
 
@@ -348,10 +575,23 @@ async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
   }
 }
 
+// Тестовый крючок для проверки поведения при падении БГЭУ.
+// Включается ТОЛЬКО переменной окружения при запуске тестового сервера,
+// из веба недоступен. Примеры: BSEU_SIMULATE_FAIL=502|403|timeout|net.
+const BSEU_SIMULATE_FAIL = String(process.env.BSEU_SIMULATE_FAIL || '').toLowerCase();
+if (BSEU_SIMULATE_FAIL) {
+  console.warn(`[TestHook] BSEU_SIMULATE_FAIL=${BSEU_SIMULATE_FAIL}: запросы к bseu.by будут падать (симуляция).`);
+}
+
 // Повтор запроса при транзитных сбоях BSEU (502/503/429, таймаут, сетевая
 // ошибка). Без этого сборка полного расписания теряет целые факультеты/группы
 // из-за случайных 502 Bad Gateway, и кэш аудиторий собирается неполным.
 async function fetchWithRetry(url, options = {}, { retries = 4, baseDelay = 500, timeout = FETCH_TIMEOUT } = {}) {
+  if (BSEU_SIMULATE_FAIL && String(url).includes('bseu.by')) {
+    if (BSEU_SIMULATE_FAIL === 'timeout') throw new Error(`Request timed out after ${timeout}ms: ${url} (simulated)`);
+    if (BSEU_SIMULATE_FAIL === 'net') throw new Error(`fetch failed (simulated): ${url}`);
+    throw new Error(`HTTP status ${BSEU_SIMULATE_FAIL} (simulated)`);
+  }
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -400,12 +640,15 @@ function decodeResponseBuffer(buffer, response) {
   return iconv.decode(buffer, charset);
 }
 
-async function fetchBseuList(action, params = {}) {
+async function fetchBseuList(action, params = {}, fetchOpts = {}) {
   const cacheKey = `list:${action}:${JSON.stringify(params)}`;
   const cached = fileGetCache(cacheKey);
   const now = Date.now();
   const listTTL = 24 * 60 * 60 * 1000;
-  if (cached && (now - cached.updatedAt < listTTL)) return cached.value;
+  if (cached && (now - cached.updatedAt < listTTL)) {
+    if (action.includes('getTeachers')) mergeTeachersToIndex(cached.value);
+    return cached.value;
+  }
 
   const bodyParts = [`__act=${action}`];
   for (const key in params) {
@@ -422,12 +665,17 @@ async function fetchBseuList(action, params = {}) {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       },
       body: iconv.encode(bodyString, 'win1251')
+    }, {
+      retries: fetchOpts.retries ?? 4,
+      baseDelay: 500,
+      timeout: fetchOpts.timeout ?? FETCH_TIMEOUT
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const buffer = await response.arrayBuffer();
     const decoded = decodeResponseBuffer(Buffer.from(buffer), response);
     const data = JSON.parse(decoded);
     fileSetCache(cacheKey, data);
+    if (action.includes('getTeachers')) mergeTeachersToIndex(data);
     return data;
   } catch (error) {
     console.error(`[BSEU List] Failed for ${action}:`, error);
@@ -539,7 +787,7 @@ function parseScheduleHtml(html) {
       currentSemesterWeek = 1;
     }
   }
-  if (!table.length) return { semesterStartDate, currentSemesterWeek, lessons: [] };
+  if (!table.length) return { semesterStartDate, currentSemesterWeek, lessons: [], isSchedulePage: false };
 
   const rows = table.find('tr');
   let currentDay = '';
@@ -599,13 +847,13 @@ function parseScheduleHtml(html) {
           const c1 = $(cells[1]);
           const isContentCell = c1.find('.distype, .teacher, em, strong, b').length > 0 || c1.attr('colspan');
           const text = c1.text().trim();
-          if (!isContentCell && /^\s*\(?[\d\s,–—\-.]+\)?\s*$/.test(text)) {
+          if (!isContentCell && /\d/.test(text) && /^\s*\(?[\d\s,–—\-.]+\)?\s*$/.test(text)) {
             weeks = text;
           }
         }
         if (!weeks) {
           const commentMatch = row.html().match(/week\[i\]:\s*([\d\s,–—\-]+)/i);
-          if (commentMatch) weeks = '(' + commentMatch[1].trim() + ')';
+          if (commentMatch && /\d/.test(commentMatch[1])) weeks = '(' + commentMatch[1].trim() + ')';
         }
         let subject = '', type = '', teacher = '', room = '';
         const contentCell = row.find("td[colspan='2'], td[colspan='3']");
@@ -630,7 +878,7 @@ function parseScheduleHtml(html) {
             const subRow = $(rowArr[j]);
             if (subRow.find('td.wday').length) break;
             const subCells = subRow.find('td');
-            if (subCells.length >= 3 && !subRow.find('td.sg').length) break;
+            if (subCells.length >= 2 && !subRow.find('td.sg').length) break;
             const sgCell = subRow.find('td.sg');
             if (!sgCell.length) continue;
             const subgroup = sgCell.text().trim();
@@ -640,13 +888,14 @@ function parseScheduleHtml(html) {
             if (!subTeacher) subTeacher = extractTeacherFromCell(subRow, $);
             const lastCell = subCells.last();
             const subRoom = lastCell.length ? cleanRoomText(lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim()) : '';
-            // Недели подгруппы могут отличаться от общих — берём из комментария BSEU
+            // Недели подгруппы могут отличаться от общих — берём из комментария BSEU,
+            // но только если там есть цифры. Иначе наследуются недели родителя.
             let subWeeks = weeks;
             const cellHtml = lastCell.length ? lastCell.html() : '';
             const wm = cellHtml && cellHtml.match(/week\[i\]:\s*\(([^)]+)\)/i);
-            if (wm) subWeeks = '(' + wm[1].trim() + ')';
+            if (wm && /\d/.test(wm[1])) subWeeks = '(' + wm[1].trim() + ')';
             subgroupLessons.push({
-              day: currentDay || "Вне сетке", time, weeks: subWeeks, subject, type,
+              day: currentDay || "Вне сетки", time, weeks: subWeeks, subject, type,
               teacher: (subTeacher || teacher).trim(), room: subRoom, isTeacher: false, subgroup
             });
           }
@@ -656,7 +905,7 @@ function parseScheduleHtml(html) {
           subgroupLessons.forEach(l => lessons.push(l));
         } else if (subject && time) {
           room = rightCell.length ? cleanRoomText(rightCell.text().trim()) : '';
-          lessons.push({ day: currentDay || "Вне сетке", time, weeks, subject, type, teacher, room, isTeacher: false });
+          lessons.push({ day: currentDay || "Вне сетки", time, weeks, subject, type, teacher, room, isTeacher: false });
         }
       }
     }
@@ -679,14 +928,162 @@ function parseScheduleHtml(html) {
     group.forEach((l, idx) => { l._subjectOrderIndex = idx + 1; });
   });
 
-  return { semesterStartDate, currentSemesterWeek, lessons };
+  return { semesterStartDate, currentSemesterWeek, lessons, isSchedulePage: true };
 }
 
-async function getScheduleWithCache(cacheKey, bodyString) {
+/* ===== Offline fallback из полного кэша (работа при недоступности БГЭУ) ===== */
+const RU_WEEKDAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
+
+function normalizeMatch(s) {
+  return String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').replace(/\s*([.|])\s*/g, '$1').trim();
+}
+function parseIsoDate2(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
+}
+function mondayOf(iso) {
+  const d = parseIsoDate2(iso);
+  if (!d) return null;
+  const dow = (d.getUTCDay() + 6) % 7;
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - dow));
+}
+function toIso(d) { return d ? d.toISOString().slice(0, 10) : null; }
+function weekNoOf(dateIso, semesterMondayIso) {
+  const monday = mondayOf(dateIso);
+  const sem = parseIsoDate2(semesterMondayIso);
+  if (!monday || !sem) return 1;
+  return Math.max(1, Math.floor((monday - sem) / 86400000 / 7) + 1);
+}
+// Совпадение ФИО преподавателя: фамилия + первые буквы имени/отчества.
+function teacherMatchCache(cacheTeacher, query) {
+  const a = normalizeMatch(cacheTeacher);
+  const b = normalizeMatch(query);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const aParts = a.split(' ').filter(Boolean);
+  const bParts = b.split(' ').filter(Boolean);
+  if (!aParts.length || !bParts.length || aParts[0] !== bParts[0]) return false;
+  const shared = Math.min(aParts.length, bParts.length) - 1;
+  for (let i = 1; i <= shared; i++) {
+    const aInit = aParts[i].replace(/\./g, '');
+    const bInit = bParts[i].replace(/\./g, '');
+    if (aInit && bInit && aInit[0] !== bInit[0]) return false;
+  }
+  return true;
+}
+function normalizeGroupTextCache(s) {
+  return normalizeMatch(s).split('|').map(p => p.trim()).filter(Boolean).join(' | ');
+}
+
+// Построение расписания группы/преподавателя из полного кэша либо null.
+function buildFullCacheSchedule(groupText, teacherName) {
+  const src = (typeof fullScheduleCache !== 'undefined' && fullScheduleCache) ? fullScheduleCache : null;
+  if (!src || !src.length) return null;
+  const ng = groupText ? normalizeGroupTextCache(groupText) : '';
+  const nt = teacherName ? normalizeMatch(teacherName) : '';
+  if (!ng && !nt) return null;
+
+  let matches;
+  if (ng) {
+    matches = src.filter(p => normalizeGroupTextCache(p.groupText) === ng);
+    if (!matches.length) {
+      const [code, spec] = ng.split('|').map(t => t.trim());
+      if (code) {
+        matches = src.filter(p => {
+          const [pCode, pSpec] = normalizeGroupTextCache(p.groupText).split('|').map(t => t.trim());
+          if (pCode !== code) return false;
+          if (!spec || !pSpec) return true;
+          return pSpec === spec;
+        });
+      }
+    }
+  } else if (nt) {
+    matches = src.filter(p => teacherMatchCache(p.teacher, nt));
+  }
+  if (!matches || !matches.length) return null;
+
+  const datesAll = [];
+  for (const p of matches) for (const d of (p.dates || [])) datesAll.push(d);
+  datesAll.sort();
+  const semesterMonday = datesAll.length ? toIso(mondayOf(datesAll[0])) : null;
+
+  const byKey = new Map();
+  for (const p of matches) {
+    const dateList = (Array.isArray(p.dates) ? p.dates : []).sort();
+    if (!dateList.length) continue;
+    for (const d of dateList) {
+      const dt = parseIsoDate2(d);
+      if (!dt) continue;
+      const day = RU_WEEKDAYS[dt.getUTCDay()];
+      const wk = semesterMonday ? weekNoOf(d, semesterMonday) : 1;
+      const key = [day, (p.subject || '').trim(), (p.type || '').trim(), (p.teacher || '').trim(), (p.audience || '').trim(), (p.startTime || '').trim(), (p.subgroup || '').trim()].join('¦');
+      let card = byKey.get(key);
+      if (!card) {
+        card = {
+          day,
+          subject: (p.subject || '').trim(),
+          type: (p.type || '').trim(),
+          teacher: (p.teacher || '').trim(),
+          room: (p.audience || '').trim(),
+          startTime: (p.startTime || '').trim(),
+          endTime: (p.endTime || '').trim(),
+          subgroup: (p.subgroup || '').trim(),
+          weeksSet: new Set(),
+          groups: new Set()
+        };
+        byKey.set(key, card);
+      }
+      card.weeksSet.add(wk);
+      if (p.groupText) card.groups.add(p.groupText);
+    }
+  }
+  if (!byKey.size) return null;
+
+  const dayOrder = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
+  const lessons = [];
+  for (const card of byKey.values()) {
+    const weeksArr = [...card.weeksSet].sort((a, b) => a - b);
+    const weeksStr = weeksArr.length && weeksArr.length <= 30 ? '(' + weeksArr.join(',') + ')' : '';
+    const teacherField = nt && card.groups.size ? [...card.groups].join(', ') : card.teacher;
+    lessons.push({
+      day: card.day,
+      time: card.startTime + (card.endTime && card.endTime !== card.startTime ? '-' + card.endTime : ''),
+      weeks: weeksStr,
+      subject: card.subject,
+      type: card.type,
+      teacher: teacherField,
+      room: card.room,
+      subgroup: card.subgroup,
+      groups: [...card.groups],
+      isTeacher: !!nt
+    });
+  }
+  lessons.sort((a, b) => {
+    const di = dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day);
+    return di !== 0 ? di : (a.time || '').localeCompare(b.time || '');
+  });
+
+  return {
+    semesterStartDate: semesterMonday || (datesAll.length ? datesAll[0] : null),
+    currentSemesterWeek: 1,
+    lessons,
+    isSchedulePage: true,
+    isFallback: true,
+    isFullCacheFallback: true,
+    savedAt: (typeof fullScheduleUpdatedAt !== 'undefined' && fullScheduleUpdatedAt) ? fullScheduleUpdatedAt : Date.now(),
+    error: null
+  };
+}
+
+async function getScheduleWithCache(cacheKey, bodyString, fallback = {}) {
   const cached = fileGetCache(cacheKey);
   const now = Date.now();
   const cacheTTL = 2 * 60 * 60 * 1000;
-  if (cached && (now - cached.updatedAt < cacheTTL)) return { ...cached.value, isFallback: false };
+  // Отравленный кэш (пустые lessons) — не «пустое расписание», а признак
+  // сбоя. Игнорируем его, иначе пустота раздавалась бы как валидная 2 часа.
+  const cachedLessons = cached && cached.value && cached.value.lessons;
+  const cachedEmpty = !Array.isArray(cachedLessons) || cachedLessons.length === 0;
+  if (cached && !cachedEmpty && (now - cached.updatedAt < cacheTTL)) return { ...cached.value, isFallback: false };
   try {
     const response = await fetchWithRetry("https://bseu.by/schedule/", {
       method: "POST",
@@ -700,11 +1097,31 @@ async function getScheduleWithCache(cacheKey, bodyString) {
     const buffer = await response.arrayBuffer();
     const htmlText = decodeResponseBuffer(Buffer.from(buffer), response);
     const parsedData = parseScheduleHtml(htmlText);
+    // Страница без таблицы расписания — это НЕ «пустое расписание», а признак
+    // того, что БГЭУ вернул ошибку/заглушку. Хороший кэш не перезаписываем.
+    if (!parsedData.isSchedulePage) {
+      throw new Error('BSEU вернул страницу без таблицы расписания');
+    }
+    // Пустой результат (0 пар при наличии таблицы) тоже не кэшируем как
+    // валидный: для преподавателей это почти всегда сбой, а не реальная пустота.
+    if (!Array.isArray(parsedData.lessons) || !parsedData.lessons.length) {
+      const fbLive = buildFullCacheSchedule(fallback.groupText, fallback.teacherName);
+      if (fbLive) {
+        console.log(`[FullCacheFallback] ${cacheKey} served from full schedule cache (${fbLive.lessons.length} lessons) over empty live.`);
+        return fbLive;
+      }
+      throw new Error('BSEU вернул расписание без пар');
+    }
     fileSetCache(cacheKey, parsedData);
     return { ...parsedData, isFallback: false };
   } catch (error) {
-    console.error(`[BSEU Schedule] Failed for ${cacheKey}:`, error);
-    if (cached) return { ...cached.value, isFallback: true, savedAt: cached.updatedAt };
+    console.error(`[BSEU Schedule] Failed for ${cacheKey}:`, error.message || error);
+    if (cached && !cachedEmpty) return { ...cached.value, isFallback: true, savedAt: cached.updatedAt };
+    const fb = buildFullCacheSchedule(fallback.groupText, fallback.teacherName);
+    if (fb) {
+      console.log(`[FullCacheFallback] ${cacheKey} served from full schedule cache (${fb.lessons.length} lessons).`);
+      return fb;
+    }
     throw error;
   }
 }
@@ -1235,10 +1652,23 @@ async function handleScheduleRequest(req, res) {
       return res.json(schedule);
     }
     if (tid && taid && sid && tname) {
+      // Заглушка из полного кэша (все ID -1): живой запрос к БГЭУ с такими
+      // ID бессмысленен — сразу отдаём расписание из полного кэша по ФИО.
+      if (String(tid) === '-1' && String(taid) === '-1' && String(sid) === '-1') {
+        const fb = buildFullCacheSchedule(null, tname);
+        if (fb) return res.json(fb);
+      }
       const body = `__act=tid.${tid.length}.${tid}taid.${taid.length}.${taid}sid.${sid.length}.${sid}__id.22.main.TSchedA.GetTSched__sp.8.tresults__fp.4.main&tname=${toWin1251Url(tname)}&period=3`;
       const cacheKey = `teacher:${tid}:${taid}:${sid}:${tname}`;
-      const schedule = await getScheduleWithCache(cacheKey, body);
+      const schedule = await getScheduleWithCache(cacheKey, body, { teacherName: tname });
       return res.json(schedule);
+    }
+    // tname без ID (поиск из полного кэша, БГЭУ недоступен): отдаём расписание
+    // преподавателя напрямую из полного кэша по ФИО.
+    if (tname && !faculty && !audience) {
+      const fb = buildFullCacheSchedule(null, tname);
+      if (fb) return res.json(fb);
+      return res.json({ semesterStartDate: null, currentSemesterWeek: 1, lessons: [], isSchedulePage: false, isFallback: true, error: 'teacher_not_found' });
     }
     if (faculty && form && course && group) {
       const schedule = await getGroupScheduleAutoDetect(faculty, form, course, group, groupText);
@@ -1332,11 +1762,44 @@ app.get('/api/groups', async (req, res) => {
 });
 app.get('/api/teachers', async (req, res) => {
   try {
-    const { q } = req.query;
-    const data = await fetchBseuList("__id.24.main.TSchedA.getTeachers", { tname: q });
-    res.json(data);
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) return res.json([]);
+    // Быстрый путь: совпадения из локального индекса — мгновенно, без БГЭУ.
+    try {
+      const fast = searchTeachersFast(q);
+      if (fast.length) {
+        res.json(fast);
+        // Совпадений мало — тихо дообогащаем индекс из БГЭУ (ответ не ждём).
+        const nq = normTeacherQuery(q);
+        if (fast.length < 8 && q.length >= 3 && !teacherRefreshInflight.has(nq)) {
+          teacherRefreshInflight.add(nq);
+          fetchBseuList("__id.24.main.TSchedA.getTeachers", { tname: q }, { retries: 1, timeout: 8000 })
+            .catch(() => null)
+            .finally(() => teacherRefreshInflight.delete(nq));
+        }
+        return;
+      }
+    } catch (e) { /* ниже медленный путь */ }
+    // В индексе пусто — идём в БГЭУ с короткими ретраями/таймаутом,
+    // чтобы подсказки не висели вечно (раньше: 4 ретрая × 15 с).
+    try {
+      const data = await fetchBseuList("__id.24.main.TSchedA.getTeachers", { tname: q }, { retries: 1, timeout: 8000 });
+      if (Array.isArray(data) && data.length) return res.json(data);
+      // БГЭУ вернул пусто — отдаём совпадения из полного кэша.
+      const fb = searchTeachersFullCache(q);
+      if (fb.length) return res.json(fb);
+      return res.json(data);
+    } catch (e) {
+      const fb = searchTeachersFullCache(q);
+      if (fb.length) return res.json(fb);
+      throw e;
+    }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    try {
+      const fb = searchTeachersFullCache(String(req.query.q || ''));
+      if (fb.length) return res.json(fb);
+    } catch (_) {}
+    res.json([]);
   }
 });
 
