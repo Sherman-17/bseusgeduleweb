@@ -2,10 +2,10 @@
   "name": "11-apk",
   "version": "1.0.0",
   "description": "",
-  "main": "schedj.js",
+  "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node schedj.js"
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",

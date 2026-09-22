@@ -1005,7 +1005,18 @@ function buildFullCacheSchedule(groupText, teacherName) {
   const datesAll = [];
   for (const p of matches) for (const d of (p.dates || [])) datesAll.push(d);
   datesAll.sort();
-  const semesterMonday = datesAll.length ? toIso(mondayOf(datesAll[0])) : null;
+  // Начало семестра НЕЛЬЗЯ брать из первой найденной даты пар: у конкретного
+  // преподавателя (или группы) занятия могут начинаться не с 1-й недели
+  // (например, только с 5-й), и тогда weekNoOf() отсчитывает недели от этой
+  // даты. Клиент же считает номер недели от semesterStartDate, который приходит
+  // в ответе (а сентябрьскую дату нормализует к 1 сентября). Из-за рассинхрона
+  // номера недель не совпадали: пары «уезжали» на чужие дни, а с середины
+  // семестра (когда номера недель у клиента превышали максимальные в ответе)
+  // расписание в режиме преподавателя вообще переставало отображаться.
+  // Берём то же академическое начало семестра, что и живой парсинг БГЭУ.
+  const semesterStart = normalizeSemesterStartDate(getAcademicSemesterStart(null));
+  const semesterMonday = toIso(mondayOf(semesterStart))
+    || (datesAll.length ? toIso(mondayOf(datesAll[0])) : null);
 
   const byKey = new Map();
   for (const p of matches) {
@@ -1064,7 +1075,7 @@ function buildFullCacheSchedule(groupText, teacherName) {
   });
 
   return {
-    semesterStartDate: semesterMonday || (datesAll.length ? datesAll[0] : null),
+    semesterStartDate: semesterStart || semesterMonday || (datesAll.length ? datesAll[0] : null),
     currentSemesterWeek: 1,
     lessons,
     isSchedulePage: true,
@@ -1827,6 +1838,62 @@ app.get('/api/schedule-range', (req, res) => {
     return { min, max };
   }
 
+// ===== Служебные эндпоинты: keep-alive и проверка занятости логина =====
+// /api/ping нужен внешнему keep-alive (Render/hoster), чтобы инстанс не
+// «засыпал». /api/auth/check-login использует клиент при регистрации: без него
+// ответ 404 (HTML) ломал проверку занятости логина.
+app.get('/api/ping', (req, res) => {
+  res.status(200).send('OK');
+});
+
+app.get('/api/cron/ping', (req, res) => {
+  const CRON_SECRET = process.env.CRON_SECRET || '';
+  if (CRON_SECRET) {
+    const token = req.query.token || req.headers['x-cron-token'] || '';
+    if (token !== CRON_SECRET) {
+      return res.status(403).json({ error: 'Forbidden: invalid token' });
+    }
+  } else {
+    const ip = req.ip || '';
+    const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    if (!isLocal) {
+      return res.status(403).json({ error: 'Forbidden: set CRON_SECRET env variable' });
+    }
+  }
+
+  const lastUpdate = fullScheduleUpdatedAt || 0;
+  const now = Date.now();
+  let triggered = false;
+  if (!fullScheduleBuilding && (!fullScheduleCache || now - lastUpdate >= FULL_SCHEDULE_INTERVAL)) {
+    console.log('[Cron/Ping] External cron triggered background schedule refresh.');
+    buildFullSchedule().catch(e => console.warn(`[Cron/Ping] Build error: ${e.message}`));
+    triggered = true;
+  }
+
+  res.json({
+    ok: true,
+    triggered,
+    building: fullScheduleBuilding,
+    hasCache: !!fullScheduleCache,
+    cacheEntries: fullScheduleCache ? fullScheduleCache.length : 0,
+    cacheAgeSeconds: lastUpdate ? Math.floor((now - lastUpdate) / 1000) : null,
+    lastUpdate: lastUpdate ? new Date(lastUpdate).toISOString() : null,
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/auth/check-login', (req, res) => {
+  try {
+    const login = String(req.query.login || '').trim();
+    if (!login) return res.json({ ok: true, taken: false });
+    res.json({ ok: true, taken: auth.isLoginTaken(login) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
 // ===== Health check endpoint для Render =====
 app.get('/api/status', (req, res) => {
   res.json({
@@ -1845,6 +1912,14 @@ app.get('/api/status', (req, res) => {
     nodeVersion: process.version,
     timestamp: Date.now()
   });
+});
+
+// Любой неизвестный /api/* маршрут — это ошибка (JSON 404), а НЕ index.html.
+// Иначе устаревший клиент получит HTML с кодом 200 и упадёт на response.json(),
+// из-за чего «расписание и списки не загружаются».
+app.use('/api', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.status(404).json({ error: 'Unknown API route', path: req.path });
 });
 
 app.use(express.static(__dirname));
