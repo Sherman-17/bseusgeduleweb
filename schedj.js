@@ -1324,7 +1324,10 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     let trM;
     while ((trM = trRegex.exec(tableHtml)) !== null) {
       const rHtml = trM[1];
-      const cellRegex = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+      // Ячейки пар берём ТОЛЬКО из <td> — как row.find('td') в cheerio-версии и на
+      // хостинге. Строки заголовков/легенды на <th> (Время / Дисциплина,
+      // преподаватель) иначе превращались в фантомные пары «Вне сетки».
+      const cellRegex = /<(td)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
       const cells = [];
       let cM;
       while ((cM = cellRegex.exec(rHtml)) !== null) {
@@ -1959,7 +1962,7 @@ app.get('/api/forms', async (req, res) => {
         const full = p.audience;
         if (!full) continue;
         // Разделяем строку аудиторий по запятым и обрабатываем каждую отдельно
-        const roomParts = String(full).trim().split(',').map(r => r.trim());
+        const roomParts = extractRoomNumbers(full);
         // Проверяем, что все части содержат цифры (фильтруем фамилии преподавателей)
         const allValid = roomParts.every(part => /\d/.test(part.trim()));
         if (!allValid) continue;
@@ -1971,11 +1974,16 @@ app.get('/api/forms', async (req, res) => {
             // (например, "2" найдет "2/301", "301" найдет "2/301", "2/301" найдет "2/301")
             if (!room.toLowerCase().includes(q)) continue;
           }
-          map.set(room, (map.get(room) || 0) + 1);
+          const key = normalizeAudienceRoom(room);
+          const existing = map.get(key);
+          map.set(key, {
+            audience: existing ? existing.audience : room,
+            count: (existing ? existing.count : 0) + 1
+          });
         }
       }
       const list = Array.from(map.entries())
-        .map(([audience, count]) => ({ audience, count }))
+        .map(([, value]) => value)
         .sort((a, b) => {
           const na = Number(a.audience.replace(/\D/g, '')) || 0;
           const nb = Number(b.audience.replace(/\D/g, '')) || 0;
@@ -2156,12 +2164,16 @@ app.get('/api/forms', async (req, res) => {
     return tokens;
   }
 
-  function normalizeAudienceRoom(room) {
+  function normalizeRoomName(room) {
     return String(room || '')
       .trim()
-      .replace(/\s+/g, '')
       .replace(/\s*\/\s*/g, '/')
+      .replace(/\s+/g, ' ')
       .toLowerCase();
+  }
+
+  function normalizeAudienceRoom(room) {
+    return normalizeRoomName(room);
   }
 
   function normalizeAudienceNumber(room) {
@@ -2321,28 +2333,29 @@ app.get('/api/forms', async (req, res) => {
           if (!dates.length) continue;
           if (!l.room) continue;
           const roomStr = String(l.room).trim();
-          const roomParts = roomStr.split(',').map(p => p.trim());
+          const roomParts = extractRoomNumbers(roomStr);
           const allValid = roomParts.every(part => /\d/.test(part));
           if (!allValid) continue;
           const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
-          const entry = {
-            audience: l.room,
-            audienceTokens: audienceTokens(l.room),
-            dates,
-            subject: l.subject,
-            type: l.type,
-            teacher: l.teacher || '',
-            groupText: g.groupText,
-            startTime: start || '',
-            endTime: end || ''
-          };
-          all.push(entry);
 
-          if (l.room) {
-            if (!audienceScheduleCache[l.room]) {
-              audienceScheduleCache[l.room] = [];
+          for (const singleRoom of roomParts) {
+            const entry = {
+              audience: singleRoom,
+              audienceTokens: audienceTokens(singleRoom),
+              dates,
+              subject: l.subject,
+              type: l.type,
+              teacher: l.teacher || '',
+              groupText: g.groupText,
+              startTime: start || '',
+              endTime: end || '',
+              subgroup: l.subgroup || ''
+            };
+            all.push(entry);
+            if (!audienceScheduleCache[singleRoom]) {
+              audienceScheduleCache[singleRoom] = [];
             }
-            audienceScheduleCache[l.room].push(entry);
+            audienceScheduleCache[singleRoom].push(entry);
           }
         }
       }
@@ -2412,7 +2425,7 @@ app.get('/api/forms', async (req, res) => {
     // совпадение по полной аудитории (в т.ч. среди объединённых строк
     // "2/301, 2/406"). Голый номер ("301") — по токенам по всем корпусам.
     const hasSlash = String(targetAud).includes('/');
-    const targetRooms = String(targetAud).split(',').map(r => r.trim());
+    const targetRooms = String(targetAud).split(',').map(r => normalizeRoomName(r)).filter(Boolean);
     const queryTokens = audienceTokens(targetAud);
 
     // Объединяем карточки одной и той же пары (один предмет, тип, время и
@@ -2429,7 +2442,7 @@ app.get('/api/forms', async (req, res) => {
       if (!p.dates.includes(date)) continue;
       // Точное совпадение по полной аудитории (в т.ч. для объединённых
       // строк вида "2/301, 2/406"); голый номер — по токенам.
-      const rooms = String(p.audience || '').split(',').map(r => r.trim());
+      const rooms = extractRoomNumbers(p.audience);
       const exact = hasSlash && rooms.some(r => targetRooms.some(target => audienceRoomEquals(target, r)));
       const byToken = !hasSlash && queryTokens.length > 0 && rooms.some(r => targetRooms.some(target => audienceNumberEquals(target, r)));
       if (!exact && !byToken) continue;

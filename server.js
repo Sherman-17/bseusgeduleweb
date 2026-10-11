@@ -899,7 +899,10 @@ function parseScheduleHtml(html) {
   let trM;
   while ((trM = trRegex.exec(tableHtml)) !== null) {
     const rHtml = trM[1];
-    const cellRegex = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+    // Ячейки пар берём ТОЛЬКО из <td> — как row.find('td') в cheerio-версии и на
+    // хостинге. Строки заголовков/легенды на <th> (Время / Дисциплина,
+    // преподаватель) иначе превращались в фантомные пары «Вне сетки».
+    const cellRegex = /<(td)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
     const cells = [];
     let cM;
     while ((cM = cellRegex.exec(rHtml)) !== null) {
@@ -1399,12 +1402,16 @@ function cleanRoomText(raw) {
   return extractRoomNumbers(String(raw || '').trim()).join(', ');
 }
 
-function normalizeAudienceRoom(room) {
+function normalizeRoomName(room) {
   return String(room || '')
     .trim()
-    .replace(/\s+/g, '')
     .replace(/\s*\/\s*/g, '/')
+    .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+function normalizeAudienceRoom(room) {
+  return normalizeRoomName(room);
 }
 
 function normalizeAudienceNumber(room) {
@@ -1562,36 +1569,15 @@ async function buildFullSchedule() {
         if (!dates.length) continue;
         if (!l.room) continue;
         const roomStr = String(l.room).trim();
-        const roomParts = roomStr.split(',').map(p => p.trim());
+        const roomParts = extractRoomNumbers(roomStr);
         const allValid = roomParts.every(part => /\d/.test(part));
         if (!allValid) continue;
         const [start, end] = String(l.time || '').split(/[-–]/).map(s => s.trim());
 
-        // Если несколько аудиторий и нет подгруппы - создаём отдельные записи для каждой аудитории
-        if (roomParts.length > 1 && !l.subgroup) {
-          for (const singleRoom of roomParts) {
-            const entry = {
-              audience: singleRoom,
-              audienceTokens: audienceTokens(singleRoom),
-              dates,
-              subject: l.subject,
-              type: l.type,
-              teacher: l.teacher || '',
-              groupText: g.groupText,
-              startTime: start || '',
-              endTime: end || '',
-              subgroup: l.subgroup || ''
-            };
-            all.push(entry);
-            if (!audienceScheduleCache[singleRoom]) {
-              audienceScheduleCache[singleRoom] = [];
-            }
-            audienceScheduleCache[singleRoom].push(entry);
-          }
-        } else {
+        for (const singleRoom of roomParts) {
           const entry = {
-            audience: l.room,
-            audienceTokens: audienceTokens(l.room),
+            audience: singleRoom,
+            audienceTokens: audienceTokens(singleRoom),
             dates,
             subject: l.subject,
             type: l.type,
@@ -1602,13 +1588,11 @@ async function buildFullSchedule() {
             subgroup: l.subgroup || ''
           };
           all.push(entry);
-          if (l.room) {
-            if (!audienceScheduleCache[l.room]) {
-              audienceScheduleCache[l.room] = [];
-            }
-            audienceScheduleCache[l.room].push(entry);
+          if (!audienceScheduleCache[singleRoom]) {
+            audienceScheduleCache[singleRoom] = [];
+          }
+          audienceScheduleCache[singleRoom].push(entry);
         }
-      }
     }
   }
 
@@ -1686,11 +1670,11 @@ async function getAudienceScheduleBseu(audience, date) {
   // не подхватывать другие корпуса ("4/301").
   // Если запрос — голый номер ("301") — совпадение по токенам по всем корпусам.
   const hasSlash = String(targetAud).includes('/');
-  const targetRooms = String(targetAud).split(',').map(r => r.trim());
+  const targetRooms = String(targetAud).split(',').map(r => normalizeRoomName(r)).filter(Boolean);
   const queryTokens = audienceTokens(targetAud);
   const matched = src.filter(p => {
     if (!p.dates.includes(date)) return false;
-    const rooms = String(p.audience || '').split(',').map(r => r.trim());
+    const rooms = extractRoomNumbers(p.audience);
     if (hasSlash) {
       return rooms.some(r => targetRooms.some(target => audienceRoomEquals(target, r)));
     }
@@ -1703,7 +1687,7 @@ async function getAudienceScheduleBseu(audience, date) {
   // преподаватель), идущей у нескольких групп одновременно (например, лекция),
   // в одну карточку со списком всех групп.
   const matchedWithMR = matched.map(p => {
-    const mr = matchedRoomsOf(p.audience, hasSlash, targetRooms);
+    const mr = matchedRoomsOf(p.audience, hasSlash, targetRooms, queryTokens);
     return { ...p, matchedRooms: mr };
   });
 
@@ -1886,18 +1870,23 @@ app.get('/api/audiences', async (req, res) => {
     for (const p of src) {
       const full = p.audience;
       if (!full) continue;
-      const roomParts = String(full).trim().split(',').map(r => r.trim());
+      const roomParts = extractRoomNumbers(full);
       const allValid = roomParts.every(part => /\d/.test(part.trim()));
       if (!allValid) continue;
       for (const room of roomParts) {
         if (q) {
           if (!room.toLowerCase().includes(q)) continue;
         }
-        map.set(room, (map.get(room) || 0) + 1);
+        const key = normalizeAudienceRoom(room);
+        const existing = map.get(key);
+        map.set(key, {
+          audience: existing ? existing.audience : room,
+          count: (existing ? existing.count : 0) + 1
+        });
       }
     }
     const list = Array.from(map.entries())
-      .map(([audience, count]) => ({ audience, count }))
+      .map(([, value]) => value)
       .sort((a, b) => {
         const na = Number(a.audience.replace(/\D/g, '')) || 0;
         const nb = Number(b.audience.replace(/\D/g, '')) || 0;
