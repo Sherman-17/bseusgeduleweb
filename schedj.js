@@ -598,7 +598,6 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
   const path = require('path');
   const fs = require('fs');
   const iconv = require('iconv-lite');
-  const cheerio = require('cheerio');
   const Database = require('better-sqlite3');
   const bcrypt = require('bcryptjs');
   const crypto = require('crypto');
@@ -1175,16 +1174,115 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     return [...new Set(matches.map(m => m.replace(/\s*\/\s*/g, '/')))];
   }
   function cleanRoomText(raw) {
-    const s = String(raw || '').trim();
-    if (!s) return s;
-    const cleaned = extractRoomNumbers(s).join(', ');
-    return cleaned || s;
+    return extractRoomNumbers(String(raw || '').trim()).join(', ');
+  }
+
+  function stripTags(html) {
+    return String(html || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function getClassAttr(attrs) {
+    const m = String(attrs || '').match(/class\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    if (!m) return '';
+    return m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : (m[3] || ''));
+  }
+
+  // Читает содержимое элемента с учётом вложенности однотипных тегов: </b>
+  // внутри <span class="teacher"> не должен закрывать <span> (иначе имя
+  // обрезалось бы до первого вложенного закрывающего тега).
+  function readElementInner(html, tag, openEnd) {
+    const re = new RegExp('<(/?)' + tag + '(?=[\\s/>])((?:[^>"\']|"[^"]*"|\'[^\']*\')*)>', 'gi');
+    re.lastIndex = openEnd;
+    let depth = 1;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      if (m[1] === '/') {
+        depth--;
+        if (depth === 0) {
+          return { inner: html.slice(openEnd, m.index), closeEnd: m.index + m[0].length };
+        }
+      } else if (!/\/\s*>$/.test(m[0])) {
+        depth++;
+      }
+    }
+    return { inner: html.slice(openEnd), closeEnd: html.length };
+  }
+
+  function findFirstElByClass(html, token, mode) {
+    const re = /<([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+    const tokenRe = mode === 'token' ? new RegExp('(^|\\s)' + token + '(\\s|$)', 'i') : null;
+    const lowerToken = String(token).toLowerCase();
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const cls = getClassAttr(m[2]);
+      if (!cls) continue;
+      const ok = mode === 'token'
+        ? tokenRe.test(cls)
+        : cls.toLowerCase().indexOf(lowerToken) !== -1;
+      if (ok) {
+        const openEnd = m.index + m[0].length;
+        const r = readElementInner(html, m[1], openEnd);
+        return { start: m.index, inner: r.inner, closeEnd: r.closeEnd };
+      }
+    }
+    return null;
+  }
+
+  function findFirstElByTag(html, tags) {
+    const want = {};
+    (Array.isArray(tags) ? tags : [tags]).forEach(t => { want[t.toLowerCase()] = true; });
+    const re = /<([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*)\/?>/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      if (!want[m[1].toLowerCase()]) continue;
+      const openEnd = m.index + m[0].length;
+      const r = readElementInner(html, m[1], openEnd);
+      return { start: m.index, inner: r.inner, closeEnd: r.closeEnd };
+    }
+    return null;
+  }
+
+  function removeEls(html, finder) {
+    let s = String(html || '');
+    for (let g = 0; g < 500; g++) {
+      const el = finder(s);
+      if (!el) return s;
+      s = s.slice(0, el.start) + s.slice(el.closeEnd);
+    }
+    return s;
+  }
+
+  function removeAllByClass(html, token, mode) {
+    return removeEls(html, h => findFirstElByClass(h, token, mode));
+  }
+
+  function removeAllByTag(html, tags) {
+    return removeEls(html, h => findFirstElByTag(h, tags));
+  }
+
+  function extractTeacherFromHtml(html) {
+    if (!html) return '';
+    const el = findFirstElByClass(html, 'teacher', 'token') || findFirstElByClass(html, 'teacher', 'substr');
+    if (el) {
+      const t = stripTags(el.inner);
+      if (t) return t;
+    }
+    const plain = stripTags(html);
+    const m = plain.match(/([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2})/);
+    return m ? m[1].trim() : '';
   }
 
   function parseScheduleHtml(html) {
-    const $ = cheerio.load(html);
-    const table = $('table').first();
-    
     let semesterStartDate = null;
     let currentSemesterWeek = 1;
     
@@ -1202,62 +1300,115 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
         const diff = shifted.getUTCDate() - day + (day === 0 ? -6 : 1);
         const monday = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate() + diff));
         const sd = new Date(monday.getTime() - (currentWeekNum - 1) * 7 * 24 * 60 * 60 * 1000);
-        semesterStartDate = normalizeSemesterStart(sd.toISOString().slice(0, 10));
+        let candidate = normalizeSemesterStart(sd.toISOString().slice(0, 10));
+        if (candidate.includes('-08-')) {
+          const year = shifted.getUTCFullYear();
+          const sept1 = new Date(Date.UTC(year, 8, 1));
+          candidate = normalizeSemesterStartDate(normalizeSemesterStart(sept1.toISOString().slice(0, 10)));
+        }
+        semesterStartDate = normalizeSemesterStartDate(candidate);
       } else {
         semesterStartDate = getAcademicSemesterStart(null);
         currentSemesterWeek = 1;
       }
     }
     
-    if (!table.length) {
-      return { semesterStartDate, currentSemesterWeek, lessons: [] };
+    const tableMatch = html.match(/<table\b[^>]*>([\s\S]*?)<\/table>/i);
+    if (!tableMatch) {
+      return { semesterStartDate, currentSemesterWeek, lessons: [], isSchedulePage: false };
     }
     
-    const rows = table.find('tr');
-    let currentDay = '';
-    const lessons = [];
-    
+    const tableHtml = tableMatch[1];
+    const trRegex = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+    const rowList = [];
+    let trM;
+    while ((trM = trRegex.exec(tableHtml)) !== null) {
+      const rHtml = trM[1];
+      const cellRegex = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+      const cells = [];
+      let cM;
+      while ((cM = cellRegex.exec(rHtml)) !== null) {
+        const tag = cM[1].toLowerCase();
+        const attrs = cM[2];
+        const innerHtml = cM[3];
+        const clsM = attrs.match(/class=["']([^"']*)["']/i);
+        const className = clsM ? clsM[1] : '';
+        const colM = attrs.match(/colspan=["']?(\d+)["']?/i);
+        const hasColspan = !!colM;
+        const colspan = colM ? parseInt(colM[1], 10) : 1;
+        cells.push({
+          tag,
+          className,
+          colspan,
+          hasColspan,
+          html: innerHtml,
+          text: stripTags(innerHtml)
+        });
+      }
+      rowList.push({ html: rHtml, cells });
+    }
+
+    const theadMatch = tableHtml.match(/<thead\b[^>]*>([\s\S]*?)<\/thead>/i);
+    let headerHtml = theadMatch ? theadMatch[1] : '';
+    if (!headerHtml && rowList.length > 0) {
+      headerHtml = rowList[0].html;
+    }
     const headers = [];
-    table.find('thead th').each((idx, th) => {
-      headers.push($(th).text().trim().toLowerCase());
-    });
+    if (headerHtml) {
+      const cellRegex = /<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+      let cM;
+      while ((cM = cellRegex.exec(headerHtml)) !== null) {
+        headers.push(stripTags(cM[2]).toLowerCase());
+      }
+    }
     const isTeacherSchedule = headers.includes('группа');
     
-    const rowArr = rows.toArray();
-    for (let i = 0; i < rowArr.length; i++) {
-      const row = $(rowArr[i]);
-      const wdayCell = row.find('td.wday');
-      if (wdayCell.length) {
-        currentDay = wdayCell.text().trim();
+    let currentDay = '';
+    const lessons = [];
+
+    for (let i = 0; i < rowList.length; i++) {
+      const row = rowList[i];
+      const wdayCell = row.cells.find(c => c.className && /\b(wday|day|dayofweek|day-name)\b/i.test(c.className));
+      if (wdayCell) {
+        currentDay = wdayCell.text;
         continue;
       }
       
-      const cells = row.find('td');
-      if (cells.length >= 3) {
+      const cells = row.cells;
+      if (cells.length >= 2) {
         if (isTeacherSchedule) {
           if (cells.length >= 5) {
-            const time = $(cells[0]).text().trim();
-            const groupText = $(cells[1]).html().replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
-            const subgroup = $(cells[2]).text().trim();
-            const contentCell = $(cells[3]);
-            const room = $(cells[4]).text().trim();
+            const time = cells[0].text;
+            const groupText = cells[1].html.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+            const subgroup = cells[2].text;
+            const contentCell = cells[3];
+            const room = cleanRoomText(cells[4].text);
             
-            const distypeSpan = contentCell.find('.distype');
-            const type = distypeSpan.length ? distypeSpan.text().replace(/[()]/g, '').trim() : '';
+            const dtEl = findFirstElByClass(contentCell.html, 'distype', 'token');
+            const type = dtEl ? stripTags(dtEl.inner).replace(/[()]/g, '').trim() : '';
             
-            const emEl = contentCell.find('em');
-            const subject = emEl.length ? emEl.text().trim() : '';
+            let subject = '';
+            const emEl = findFirstElByTag(contentCell.html, 'em');
+            if (emEl) subject = stripTags(emEl.inner);
+            if (!subject) {
+              const stEl = findFirstElByTag(contentCell.html, ['strong', 'b']);
+              if (stEl) subject = stripTags(stEl.inner);
+            }
             
             let weeks = '';
-            const clone = contentCell.clone();
-            clone.find('.distype').remove();
-            clone.find('em').remove();
-            const rawText = clone.text().trim();
-            const match = rawText.match(/^\(([^)]+)\)/);
+            let rawHtml = removeAllByClass(contentCell.html, 'distype', 'token');
+            rawHtml = removeAllByTag(rawHtml, 'em');
+            rawHtml = removeAllByTag(rawHtml, ['strong', 'b']);
+            const cleanRawText = stripTags(rawHtml);
+            const match = cleanRawText.match(/^\(([^)]+)\)/);
             if (match) {
               weeks = match[1];
-            } else {
-              weeks = rawText;
+            } else if (/^\s*[\d\s,–—\-.]+\s*$/.test(cleanRawText)) {
+              weeks = cleanRawText;
+            }
+            if (!weeks) {
+              const commentMatch = row.html.match(/week\[i\]:\s*([\d\s,–—\-]+)/i);
+              if (commentMatch) weeks = '(' + commentMatch[1].trim() + ')';
             }
             
             const groups = groupText.split(/[\n\r,;]+|\s{2,}/).map(g => g.trim()).filter(Boolean);
@@ -1271,81 +1422,70 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
                 type,
                 teacher: displayGroup,
                 room,
-                isTeacher: true
+                isTeacher: true,
+                groups,
+                subgroup
               });
             }
           }
         } else {
-          const time = $(cells[0]).text().trim();
-          // Колонки недель в таблице может не быть (напр. у заочников каждая
-          // строка — конкретная дата): читаем cells[1] как недели ТОЛЬКО если
-          // это не ячейка контента и текст похож на номера недель.
+          const isSgRow = cells.some(c => c.className && /\bsg\b/i.test(c.className));
+          if (isSgRow) continue;
+
+          const time = cells[0].text;
           let weeks = '';
           if (cells.length >= 3) {
-            const c1 = $(cells[1]);
-            const isContentCell = c1.find('.distype, .teacher, em, strong, b').length > 0 || c1.attr('colspan');
-            const text = c1.text().trim();
-            if (!isContentCell && /^\s*\(?[\d\s,–—\-.]+\)?\s*$/.test(text)) {
+            const c1 = cells[1];
+            const isContentCell = /\b(distype|teacher)\b/i.test(c1.html) || /<(?:em|strong|b)\b/i.test(c1.html) || c1.hasColspan;
+            const text = c1.text;
+            if (!isContentCell && /\d/.test(text) && /^\s*\(?[\d\s,–—\-.]+\)?\s*$/.test(text)) {
               weeks = text;
             }
           }
           if (!weeks) {
-            const commentMatch = row.html().match(/week\[i\]:\s*([\d\s,–—\-]+)/i);
-            if (commentMatch) weeks = '(' + commentMatch[1].trim() + ')';
+            const commentMatch = row.html.match(/week\[i\]:\s*([\d\s,–—\-]+)/i);
+            if (commentMatch && /\d/.test(commentMatch[1])) weeks = '(' + commentMatch[1].trim() + ')';
           }
           let subject = '';
           let type = '';
           let teacher = '';
           let room = '';
           
-          const contentCell = row.find("td[colspan='2'], td[colspan='3']");
-          const rightCell = row.find('td.right, td.rght');
+          const contentCell = cells.find(c => c.hasColspan && c.colspan >= 2 && c.colspan <= 4);
+          const rightCell = cells.find(c => c.className && /\b(right|rght)\b/i.test(c.className));
           
-          if (contentCell.length) {
-            const distypeSpan = contentCell.find('.distype');
-            type = distypeSpan.length ? distypeSpan.text().replace(/[()]/g, '').trim() : '';
-            
-            const teacherSpan = contentCell.find('.teacher, .teacher.dd');
-            teacher = teacherSpan.length ? teacherSpan.text().trim() : '';
-            if (!teacher) teacher = extractTeacherFromCell(contentCell, $);
-            
-            const clone = contentCell.clone();
-            clone.find('.distype').remove();
-            clone.find('.teacher, .teacher.dd').remove();
-            subject = clone.text().replace(/,\s*$/, '').trim();
+          if (contentCell) {
+            const dtEl = findFirstElByClass(contentCell.html, 'distype', 'token');
+            type = dtEl ? stripTags(dtEl.inner).replace(/[()]/g, '').trim() : '';
+            teacher = extractTeacherFromHtml(contentCell.html);
+            let rawSubj = removeAllByClass(contentCell.html, 'distype', 'token');
+            rawSubj = removeAllByClass(rawSubj, 'teacher', 'token');
+            subject = stripTags(rawSubj).replace(/,\s*$/, '').trim();
           }
           
           const subgroupLessons = [];
           if (subject) {
-            for (let j = i + 1; j < rowArr.length; j++) {
-              const subRow = $(rowArr[j]);
-              if (subRow.find('td.wday').length) break;
-              const subCells = subRow.find('td');
-              if (subCells.length >= 2 && !subRow.find('td.sg').length) break;
-              const sgCell = subRow.find('td.sg');
-              if (!sgCell.length) continue;
-              const subgroup = sgCell.text().trim();
-              // У строки подгруппы может быть собственное время
+            for (let j = i + 1; j < rowList.length; j++) {
+              const subRow = rowList[j];
+              if (subRow.cells.some(c => c.className && /\b(wday|day|dayofweek|day-name)\b/i.test(c.className))) break;
+              const subCells = subRow.cells;
+              if (subCells.length >= 2 && !subCells.some(c => c.className && /\bsg\b/i.test(c.className))) break;
+              const sgCell = subCells.find(c => c.className && /\bsg\b/i.test(c.className));
+              if (!sgCell) continue;
+              const subgroup = sgCell.text;
               let subTime = time;
-              const subTimeText = subCells.length ? $(subCells[0]).text().trim() : '';
-              if (/^\s*\d{1,2}[:.]\d{2}\s*[-–]\s*\d{1,2}[:.]\d{2}\s*$/.test(subTimeText)) {
-                subTime = subTimeText;
+              if (subCells.length && /^\s*\d{1,2}[:.]\d{2}\s*[-–]\s*\d{1,2}[:.]\d{2}\s*$/.test(subCells[0].text)) {
+                subTime = subCells[0].text;
               }
-              let subTeacher = '';
-              const subTeacherSpan = subRow.find('.teacher, .teacher.dd, span[class*="teacher"]');
-              if (subTeacherSpan.length) subTeacher = subTeacherSpan.first().text().trim();
-              if (!subTeacher) subTeacher = extractTeacherFromCell(subRow, $);
-              const lastCell = subCells.last();
-              const subRoom = lastCell.length
-                ? extractRoomNumbers(lastCell.text().replace(/<!--[\s\S]*?-->/g, '').trim()).join(', ')
-                : '';
-              // Недели подгруппы: свои берём, только если там есть цифры.
+              let subTeacher = extractTeacherFromHtml(subRow.html) || teacher;
+              const lastCell = subCells[subCells.length - 1];
+              const subRoom = lastCell ? cleanRoomText(lastCell.text.replace(/<!--[\s\S]*?-->/g, '').trim()) : '';
               let subWeeks = weeks;
-              const cellHtml = lastCell.length ? lastCell.html() : '';
+              const cellHtml = lastCell ? lastCell.html : '';
               const wm = cellHtml && cellHtml.match(/week\[i\]:\s*([\d\s,–—\-]+)/i);
               if (wm && /\d/.test(wm[1])) subWeeks = '(' + wm[1].trim() + ')';
               if (subCells.length >= 3) {
-                const sc1Text = $(subCells[1]).text().trim();
+                const sc1Text = subCells[1].text;
                 if (/\d/.test(sc1Text) && /^\s*\(?[\d\s,–—\-.]+\)?\s*$/.test(sc1Text)) {
                   subWeeks = sc1Text;
                 }
@@ -1360,7 +1500,7 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
           if (subgroupLessons.length) {
             subgroupLessons.forEach(l => lessons.push(l));
           } else if (subject && time) {
-            room = rightCell.length ? extractRoomNumbers(rightCell.text()).join(', ') : '';
+            room = rightCell ? cleanRoomText(rightCell.text) : '';
             lessons.push({ day: currentDay || "Вне сетки", time, weeks, subject, type, teacher, room, isTeacher: false });
           }
         }
@@ -1397,7 +1537,8 @@ if (typeof window === 'undefined' && typeof require !== 'undefined') {
     return {
       semesterStartDate,
       currentSemesterWeek,
-      lessons
+      lessons,
+      isSchedulePage: true
     };
   }
 
@@ -2015,42 +2156,69 @@ app.get('/api/forms', async (req, res) => {
     return tokens;
   }
 
+  function normalizeAudienceRoom(room) {
+    return String(room || '')
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/\s*\/\s*/g, '/')
+      .toLowerCase();
+  }
+
+  function normalizeAudienceNumber(room) {
+    const normalized = normalizeAudienceRoom(room);
+    const slashIndex = normalized.lastIndexOf('/');
+    return (slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized).trim();
+  }
+
+  function normalizeLetterSuffix(letter) {
+    if (!letter) return '';
+    const map = { 'a':'а', 'b':'б', 'c':'с', 'd':'д', 'e':'е', 'f':'ф', 'g':'г', 'h':'х', 'i':'и', 'k':'к', 'l':'л', 'm':'м', 'n':'н', 'o':'о', 'p':'п', 'r':'р', 's':'с', 't':'т', 'u':'у', 'v':'в', 'w':'в', 'x':'х', 'y':'у', 'z':'з' };
+    return String(letter).toLowerCase().split('').map(ch => map[ch] || ch).join('');
+  }
+
+  function splitAudienceNumber(room) {
+    const normalized = normalizeAudienceNumber(room);
+    const m = String(normalized).match(/^(\d+)\s*([А-ЯЁа-яёA-Za-z]*)$/);
+    return {
+      base: m ? String(parseInt(m[1], 10) || m[1]) : normalized,
+      letter: (m && m[2]) ? normalizeLetterSuffix(m[2]) : ''
+    };
+  }
+
+  function audienceNumberEquals(a, b) {
+    const A = splitAudienceNumber(a);
+    const B = splitAudienceNumber(b);
+    if (A.base !== B.base) return false;
+    if (A.letter && B.letter && A.letter !== B.letter) return false;
+    return true;
+  }
+
+  function audienceRoomEquals(a, b) {
+    const A = normalizeAudienceRoom(a);
+    const B = normalizeAudienceRoom(b);
+    const ia = A.indexOf('/');
+    const ib = B.indexOf('/');
+    const buildingA = ia >= 0 ? A.slice(0, ia) : '';
+    const buildingB = ib >= 0 ? B.slice(0, ib) : '';
+    if (buildingA && buildingB && buildingA !== buildingB) return false;
+    return audienceNumberEquals(
+      ia >= 0 ? A.slice(ia + 1) : A,
+      ib >= 0 ? B.slice(ib + 1) : B
+    );
+  }
+
   // Возвращает только те аудитории пары, которые реально совпали с запросом.
-  // Нужно, чтобы в режиме аудитории для "2/300" не показывались все комнаты
-  // исходной строки BSEU ("2/300, 2/405"), а только запрошенная "2/300".
-  function matchedRoomsOf(audience, hasSlash, targetRooms, queryTokens) {
+  function matchedRoomsOf(audience, hasSlash, targetRooms) {
     const rooms = String(audience || '').split(',').map(r => r.trim()).filter(Boolean);
     if (!rooms.length) return [];
     if (hasSlash) {
-      return rooms.filter(r => targetRooms.includes(r));
+      return rooms.filter(r => targetRooms.some(target => audienceRoomEquals(target, r)));
     }
-    return rooms.filter(r => {
-      const toks = audienceTokens(r);
-      return queryTokens.some(qt => toks.includes(qt));
-    });
+    return rooms.filter(r => targetRooms.some(target => audienceNumberEquals(target, r)));
   }
 
-  // Извлечение преподавателя из ячейки пары. BSEU хранит имя в разных
-  // вариантах (span.teacher, span.teacher.dd, a.teacher, любой элемент с
-  // классом "teacher" внутри), а иногда — просто текстом "Фамилия И.О.".
-  function extractTeacherFromCell(contentCell, $) {
-    if (!contentCell || !contentCell.length) return '';
-    let t = '';
-    const sel = contentCell.find('.teacher, a.teacher, span[class*="teacher"], b.teacher');
-    if (sel.length) t = sel.first().text().trim();
-    if (!t) {
-      contentCell.find('*').each(function () {
-        const cls = ($(this).attr('class') || '').toLowerCase();
-        if (cls.includes('teacher')) { t = $(this).text().trim(); return false; }
-      });
-    }
-    if (!t) {
-      // Запасной вариант: "Фамилия И.И." или "Фамилия И И" внутри ячейки
-      const txt = contentCell.text() || '';
-      const m = txt.match(/([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2})/);
-      if (m) t = m[1].trim();
-    }
-    return t;
+  function extractTeacherFromCell(html) {
+    return extractTeacherFromHtml(typeof html === 'string' ? html : (html ? html.html || '' : ''));
   }
 
   // Преобразование времени "ЧЧ:ММ" в минуты для надёжной сортировки
@@ -2061,22 +2229,17 @@ app.get('/api/forms', async (req, res) => {
     return Number(m[1]) * 60 + Number(m[2]);
   }
 
-  // Собрать полную копию расписания всех групп всех факультетов.
-  // Возвращает массив пар, каждая с готовыми датами (strings) и токенами аудитории.
-  // Компактная подпись расписания для сверки с предыдущей копией.
+  // Компактная подпись расписания для сверки с предыдущей копией через MD5
   function scheduleSignature(entries) {
     if (!Array.isArray(entries) || !entries.length) return '';
-    const parts = entries.map(e => [
-      (e.subject || '').trim().toLowerCase(),
-      (e.type || '').trim().toLowerCase(),
-      (e.teacher || '').trim().toLowerCase(),
-      (e.groupText || '').trim().toLowerCase(),
-      (e.audience || '').trim(),
-      (e.startTime || ''),
-      (e.endTime || ''),
-      (e.dates || []).slice().sort().join(',')
-    ].join('|')).sort();
-    return parts.join(';');
+    const hash = crypto.createHash('md5');
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      hash.update(
+        `${(e.subject || '').trim().toLowerCase()}|${(e.type || '').trim().toLowerCase()}|${(e.startTime || '').trim()}|${(e.endTime || '').trim()}|${(e.teacher || '').trim().toLowerCase()}|${(e.audience || '').trim()}|${(e.dates || []).join(',')};`
+      );
+    }
+    return hash.digest('hex');
   }
 
   async function buildFullSchedule() {
@@ -2200,7 +2363,7 @@ app.get('/api/forms', async (req, res) => {
             audienceScheduleCache,
             updatedAt: fullScheduleUpdatedAt,
             audienceScheduleUpdatedAt
-          }, null, 2));
+          }));
           console.log('[Cache] Расписание изменилось — кэш обновлён и сохранён в файл:', CACHE_FILE);
         } catch (e) {
           console.warn('[Cache] Не удалось сохранить кэш в файл:', e.message);
@@ -2267,11 +2430,11 @@ app.get('/api/forms', async (req, res) => {
       // Точное совпадение по полной аудитории (в т.ч. для объединённых
       // строк вида "2/301, 2/406"); голый номер — по токенам.
       const rooms = String(p.audience || '').split(',').map(r => r.trim());
-      const exact = rooms.some(r => targetRooms.includes(r));
-      const byToken = !hasSlash && queryTokens.length > 0 && p.audienceTokens.some(t => queryTokens.includes(t));
+      const exact = hasSlash && rooms.some(r => targetRooms.some(target => audienceRoomEquals(target, r)));
+      const byToken = !hasSlash && queryTokens.length > 0 && rooms.some(r => targetRooms.some(target => audienceNumberEquals(target, r)));
       if (!exact && !byToken) continue;
       const k = keyOf(p);
-      const mr = matchedRoomsOf(p.audience, hasSlash, targetRooms, queryTokens);
+      const mr = matchedRoomsOf(p.audience, hasSlash, targetRooms);
       let card = byKey.get(k);
       if (!card) {
         card = {
